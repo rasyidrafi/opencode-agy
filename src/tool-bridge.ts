@@ -388,7 +388,6 @@ export class BridgePool {
         agent: settings.agent,
         mode: settings.mode,
         sandbox: settings.sandbox,
-        dangerouslySkipPermissions: settings.dangerouslySkipPermissions,
         addDirs: [overlay],
         environment: { OPENCODE_AGY_BRIDGE_TOKEN: bridge.token },
       }, signal);

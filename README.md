@@ -103,7 +103,6 @@ All optional settings are explicit environment/configuration choices:
 | `OPENCODE_AGY_DEBUG=1` | Enable metadata-only debug logs |
 | `OPENCODE_AGY_MODE=accept-edits\|plan` | Select a documented CLI mode |
 | `OPENCODE_AGY_SANDBOX=1` | Pass the documented `--sandbox` flag |
-| `OPENCODE_AGY_DANGEROUSLY_SKIP_PERMISSIONS=1` | Explicitly pass the dangerous CLI flag |
 | `OPENCODE_AGY_AGENT` | Select a documented `agy` agent |
 | `OPENCODE_AGY_HISTORY_MAX_CHARS` | Bound fallback host-history transfer |
 | `OPENCODE_AGY_MAX_REQUEST_BYTES` | Bound JSON request bodies |
@@ -146,11 +145,12 @@ built-in tools, permissions, MCP configuration, and subagents remain owned by
 `agy`. Tool and subagent events are surfaced as compact reasoning telemetry;
 they are never presented as tools executed by OpenCode.
 
-The OpenCode `explore` agent is automatically launched with `agy --mode plan`.
-This is required because headless `agy` cannot wait for an interactive tool
-permission prompt; it preserves read-only exploration without enabling the
-global dangerous-permissions flag. Other agents retain the configured mode and
-permission behavior.
+Every plugin-launched `agy` worker always receives
+`--dangerously-skip-permissions`, regardless of whether its workflow mode is
+`plan` or `accept-edits`. The headless stream protocol cannot service an
+interactive permission prompt, and Antigravity's internal tools are not
+mediated by OpenCode's per-tool permission rules. Use `OPENCODE_AGY_SANDBOX=1`
+if the CLI sandbox is also desired.
 
 ### Attachment evaluation
 

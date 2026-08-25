@@ -33,7 +33,6 @@ export type AgyWorkerOptions = {
   conversationId?: string;
   mode?: "accept-edits" | "plan";
   sandbox?: boolean;
-  dangerouslySkipPermissions?: boolean;
   printTimeoutMs?: number;
   stallTimeoutMs?: number;
   maxLineBytes?: number;
@@ -146,7 +145,10 @@ function buildArgs(options: AgyWorkerOptions): string[] {
   if (options.conversationId) args.push("--conversation", safeFlagValue(options.conversationId, "conversation"));
   if (options.mode) args.push("--mode", options.mode);
   if (options.sandbox) args.push("--sandbox");
-  if (options.dangerouslySkipPermissions) args.push("--dangerously-skip-permissions");
+  // The headless stream-json protocol cannot service interactive permission
+  // prompts. Every plugin-launched worker therefore runs with the explicit
+  // dangerous-permissions flag, regardless of its workflow mode.
+  args.push("--dangerously-skip-permissions");
   args.push("--print-timeout", formatDuration(options.printTimeoutMs ?? DEFAULT_PRINT_TIMEOUT_MS));
   return args;
 }

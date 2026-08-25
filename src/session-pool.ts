@@ -28,7 +28,6 @@ export type SessionSettings = {
   agent?: string;
   mode?: "accept-edits" | "plan";
   sandbox?: boolean;
-  dangerouslySkipPermissions?: boolean;
   cliVersion?: string | null;
   executable?: string;
 };
@@ -59,7 +58,6 @@ function settingsSignature(settings: SessionSettings): string {
     agent: settings.agent ?? null,
     mode: settings.mode ?? null,
     sandbox: Boolean(settings.sandbox),
-    dangerouslySkipPermissions: Boolean(settings.dangerouslySkipPermissions),
   });
 }
 
@@ -110,7 +108,6 @@ function workerOptions(settings: SessionSettings, conversationId?: string): AgyW
     conversationId,
     mode: settings.mode,
     sandbox: settings.sandbox,
-    dangerouslySkipPermissions: settings.dangerouslySkipPermissions,
   };
 }
 

@@ -133,7 +133,7 @@ export function failureFromCliResult(result: {
   if (status === "CANCELED" || status === "CANCELLED") {
     return new AgyError(
       "process",
-      "The Antigravity CLI canceled the turn. In headless mode this usually means a tool permission request was not approved; read-only OpenCode agents use plan mode automatically.",
+      "The Antigravity CLI canceled the turn. Plugin-launched workers use --dangerously-skip-permissions because headless mode cannot approve interactive tool prompts.",
       { code: "agy_process", retryable: false },
     );
   }

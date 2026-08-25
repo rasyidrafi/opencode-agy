@@ -9,12 +9,10 @@ import {
   AGENT_HEADER,
   LOCAL_API_KEY,
   MODEL_HEADER,
-  OPENCODE_AGENT_HEADER,
   REQUEST_TOKEN_HEADER,
   SESSION_HEADER,
   envBoolean,
   envNumber,
-  modeForOpenCodeAgent,
 } from "./constants.js";
 import { detectAgy } from "./cli-detect.js";
 import { AgyAbortError, AgyError, AgyProtocolError, asAgyError, retryAfterSeconds } from "./errors.js";
@@ -633,8 +631,9 @@ async function handleChat(request: Request, body: ChatCompletionRequest): Promis
   const selected = resolveAgyModelSelection(requestedModel, requestedEffort, runtime.catalog);
   const cwd = resolvePath(readHeader(request, DIRECTORY_HEADER) || runtime.directory);
   const agent = shortHeader(readHeader(request, AGENT_HEADER) || process.env.OPENCODE_AGY_AGENT, 200);
-  const openCodeAgent = shortHeader(readHeader(request, OPENCODE_AGENT_HEADER), 200);
-  const mode = modeForOpenCodeAgent(openCodeAgent, process.env.OPENCODE_AGY_MODE);
+  const mode: "accept-edits" | "plan" | undefined = process.env.OPENCODE_AGY_MODE === "accept-edits" || process.env.OPENCODE_AGY_MODE === "plan"
+    ? (process.env.OPENCODE_AGY_MODE as "accept-edits" | "plan")
+    : undefined;
   const settings = {
     cwd,
     model: selected.cliModel,
@@ -642,7 +641,6 @@ async function handleChat(request: Request, body: ChatCompletionRequest): Promis
     ...(agent ? { agent } : {}),
     ...(mode ? { mode } : {}),
     sandbox: envBoolean("OPENCODE_AGY_SANDBOX", false),
-    dangerouslySkipPermissions: envBoolean("OPENCODE_AGY_DANGEROUSLY_SKIP_PERMISSIONS", false),
     cliVersion: runtime.catalog.version,
     executable: runtime.catalog.executable,
   } as const;

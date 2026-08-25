@@ -349,7 +349,8 @@ not silently mutate global MCP state.
 - [x] Redact prompts, environment values, authorization headers, and tool
   arguments from logs by default.
 - [x] Use restrictive permissions for session metadata and temporary files.
-- [x] Require explicit user action for installation and dangerous permissions.
+- [x] Document that headless workers always require dangerous-permissions mode
+  because the stream protocol cannot service interactive approvals.
 - [x] Document Google's current Antigravity terms and the remaining ambiguity
   around third-party hosts.
 - [x] Recommend official Vertex/API credentials for enterprise or production

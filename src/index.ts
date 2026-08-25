@@ -5,7 +5,6 @@ import {
   EFFORT_HEADER,
   LOCAL_API_KEY,
   MODEL_HEADER,
-  OPENCODE_AGENT_HEADER,
   OPENAI_COMPATIBLE_NPM,
   PROVIDER_ID,
   PROVIDER_NAME,
@@ -158,7 +157,6 @@ export const AntigravityCliPlugin: Plugin = async (input: PluginInput): Promise<
       if (variant) output.headers[EFFORT_HEADER] = variant;
       output.headers[DIRECTORY_HEADER] = input.directory;
       output.headers[SESSION_HEADER] = hookInput.sessionID;
-      output.headers[OPENCODE_AGENT_HEADER] = hookInput.agent;
       const options = hookInput.provider.options;
       const agent = typeof options.agyAgent === "string" ? options.agyAgent : undefined;
       if (agent) output.headers[AGENT_HEADER] = agent;

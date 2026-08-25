@@ -83,6 +83,7 @@ export async function runAgyOneShot(prompt: string, settings: OneShotSettings): 
     "--mode",
     "plan",
     "--sandbox",
+    "--dangerously-skip-permissions",
   ];
   if (settings.effort) args.push("--effort", settings.effort);
   if (settings.sandbox) args.push("--sandbox");

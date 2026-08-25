@@ -51,7 +51,6 @@ function providerModel(model: AgyModel, baseURL: string): Record<string, unknown
     },
     modalities: { input: ["text"], output: ["text"] },
     cost: zeroCost(),
-    limit: { context: 1_000_000, output: 64_000 },
     status: "active",
     options: { includeUsage: true },
     headers: {},
@@ -70,7 +69,6 @@ function configModel(model: AgyModel): Record<string, unknown> {
     attachment: false,
     modalities: { input: ["text"], output: ["text"] },
     capabilities: { tools: false, input: ["text"], output: ["text"] },
-    limit: { context: 1_000_000, output: 64_000 },
     options: { includeUsage: true },
     variants,
   };

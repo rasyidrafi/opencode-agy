@@ -23,6 +23,11 @@ The plugin provides:
   truthful HTTP errors, and redacted diagnostics;
 - text-only capability declarations.
 
+The official `agy models` output currently provides model slugs, display names,
+and effort tiers, but does not publish context-window or maximum-output-token
+limits. The plugin therefore leaves those metadata fields unset rather than
+claiming unsupported `1M`/`64K` limits.
+
 The plugin never reads, parses, copies, refreshes, stores, or logs OAuth
 credentials. The child process inherits the user's environment so the
 official CLI can use its own documented authentication and API-key modes.

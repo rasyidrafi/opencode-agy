@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { fallbackAgyModelCatalog, parseModelOutput, resolveAgyModelSelection } from "../src/models.js";
+import { buildProviderModels } from "../src/index.js";
 
 describe("agy model discovery", () => {
   test("parses current tabular output", () => {
@@ -23,5 +24,11 @@ describe("agy model discovery", () => {
     expect(ids).toContain("gemini-3.7-flash");
     expect(ids).not.toContain("gemini-3.7-flash-high");
     expect(catalog.models.find((model) => model.id === "gemini-3.7-flash")?.name).toBe("Gemini 3.7 Flash");
+  });
+
+  test("does not invent undocumented token limits", () => {
+    const catalog = fallbackAgyModelCatalog("fake");
+    const models = buildProviderModels(catalog, "http://127.0.0.1:1/v1");
+    expect(models["gemini-3.7-flash"].limit).toBeUndefined();
   });
 });

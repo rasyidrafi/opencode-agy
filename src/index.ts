@@ -112,6 +112,22 @@ async function currentCatalog(directory: string): Promise<AgyModelCatalog> {
   }
 }
 
+async function ensureLocalProviderMarker(client: unknown, directory: string): Promise<void> {
+  const auth = client && typeof client === "object" ? (client as { auth?: unknown }).auth : undefined;
+  const set = auth && typeof auth === "object" ? (auth as { set?: unknown }).set : undefined;
+  if (typeof set !== "function") return;
+  try {
+    // This is deliberately the fixed local marker, never a Google credential.
+    await (set as (this: unknown, options: unknown) => Promise<unknown>).call(auth, {
+      path: { id: PROVIDER_ID },
+      query: { directory },
+      body: { type: "api", key: LOCAL_API_KEY },
+    });
+  } catch (error) {
+    warn("could not persist the non-secret agy local provider marker", { kind: error instanceof Error ? error.name : "unknown" });
+  }
+}
+
 /**
  * OpenCode plugin entrypoint. Authentication remains entirely inside the
  * official `agy` process; this hook only publishes a local provider adapter.
@@ -126,6 +142,7 @@ export const AntigravityCliPlugin: Plugin = async (input: PluginInput): Promise<
   return {
     async config(config) {
       await startProxy(input.directory);
+      await ensureLocalProviderMarker(input.client, input.directory);
       ensureProviderConfig(config as Record<string, any>, await currentCatalog(input.directory));
     },
 

@@ -130,6 +130,7 @@ function buildModels(entries: Array<[string, string]>): { exact: AgyModel[]; all
     families.set(model.family, list);
   }
   const aliases: AgyModel[] = [];
+  const groupedFamilies = new Set<string>();
   for (const [family, members] of families) {
     if (members.length < 2) continue;
     const variants = Object.fromEntries(
@@ -139,7 +140,7 @@ function buildModels(entries: Array<[string, string]>): { exact: AgyModel[]; all
     );
     aliases.push({
       id: family,
-      name: family,
+      name: (members[0].name.replace(/\s*\((?:low|medium|high)\)\s*$/i, "").trim() || family),
       // The CLI accepts the concrete slugs it listed, not necessarily the
       // derived family alias. Use the first listed tier as the default and
       // replace it with an exact sibling when a variant is selected.
@@ -147,8 +148,13 @@ function buildModels(entries: Array<[string, string]>): { exact: AgyModel[]; all
       family,
       variants,
     });
+    groupedFamilies.add(family);
   }
-  return { exact, all: [...aliases, ...exact] };
+  // Effort-suffixed CLI slugs are retained in exactModels for validation and
+  // direct API requests, but the OpenCode catalog exposes one named family
+  // with variants instead of rendering the same model three or four times.
+  const ungroupedExact = exact.filter((model) => !model.family || !groupedFamilies.has(model.family));
+  return { exact, all: [...aliases, ...ungroupedExact] };
 }
 
 let catalogPromise: Promise<AgyModelCatalog> | null = null;
@@ -233,7 +239,7 @@ export function resolveAgyModelSelection(
 ): AgyModelSelection {
   const raw = (requestedModel ?? catalog.models[0]?.id ?? "").replace(/^antigravity-cli\//, "").trim();
   if (!raw) throw new AgyError("unknown_model", "No Antigravity model is available", { code: "agy_no_model" });
-  const model = catalog.models.find((entry) => entry.id === raw);
+  const model = catalog.models.find((entry) => entry.id === raw) ?? catalog.exactModels.find((entry) => entry.id === raw);
   if (!model) {
     throw new AgyError("unknown_model", `Unknown Antigravity model "${raw}"`, {
       code: "agy_unknown_model",

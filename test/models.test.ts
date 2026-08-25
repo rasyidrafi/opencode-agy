@@ -16,4 +16,12 @@ describe("agy model discovery", () => {
     expect(selected.cliModel).toBe("gemini-3.7-flash-low");
     expect(resolveAgyModelSelection("gemini-3.7-flash-high", "low", catalog).cliModel).toBe("gemini-3.7-flash-low");
   });
+
+  test("exposes one named family instead of duplicate effort-suffixed rows", () => {
+    const catalog = fallbackAgyModelCatalog("fake");
+    const ids = catalog.models.map((model) => model.id);
+    expect(ids).toContain("gemini-3.7-flash");
+    expect(ids).not.toContain("gemini-3.7-flash-high");
+    expect(catalog.models.find((model) => model.id === "gemini-3.7-flash")?.name).toBe("Gemini 3.7 Flash");
+  });
 });

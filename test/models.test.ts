@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { fallbackAgyModelCatalog, parseModelOutput, resolveAgyModelSelection } from "../src/models.js";
 import { buildProviderModels } from "../src/index.js";
+import { researchedMetadataFor } from "../src/model-metadata.js";
 
 describe("agy model discovery", () => {
   test("parses current tabular output", () => {
@@ -26,9 +27,10 @@ describe("agy model discovery", () => {
     expect(catalog.models.find((model) => model.id === "gemini-3.7-flash")?.name).toBe("Gemini 3.7 Flash");
   });
 
-  test("does not invent undocumented token limits", () => {
+  test("uses researched model limits only when a canonical match exists", () => {
     const catalog = fallbackAgyModelCatalog("fake");
     const models = buildProviderModels(catalog, "http://127.0.0.1:1/v1");
-    expect(models["gemini-3.7-flash"].limit).toBeUndefined();
+    expect(models["gemini-3.7-flash"].limit).toEqual({ context: 1_048_576, output: 65_536 });
+    expect(researchedMetadataFor({ id: "gpt-oss-120b-medium", name: "GPT-OSS", cliModel: "gpt-oss-120b-medium", family: "gpt-oss-120b", effort: "medium" })?.output).toBe(32_768);
   });
 });

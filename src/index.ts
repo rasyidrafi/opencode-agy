@@ -20,6 +20,7 @@ import {
   type AgyModelCatalog,
 } from "./models.js";
 import { getProxyBaseUrl, startProxy, stopProxy } from "./proxy.js";
+import { researchedMetadataFor } from "./model-metadata.js";
 
 function zeroCost() {
   return { input: 0, output: 0, cache: { read: 0, write: 0 } };
@@ -34,6 +35,7 @@ function modelVariants(model: AgyModel): Record<string, Record<string, unknown>>
 
 function providerModel(model: AgyModel, baseURL: string): Record<string, unknown> {
   const variants = modelVariants(model);
+  const metadata = researchedMetadataFor(model);
   return {
     id: model.id,
     providerID: PROVIDER_ID,
@@ -51,6 +53,7 @@ function providerModel(model: AgyModel, baseURL: string): Record<string, unknown
     },
     modalities: { input: ["text"], output: ["text"] },
     cost: zeroCost(),
+    ...(metadata ? { limit: { context: metadata.context, output: metadata.output } } : {}),
     status: "active",
     options: { includeUsage: true },
     headers: {},
@@ -61,6 +64,7 @@ function providerModel(model: AgyModel, baseURL: string): Record<string, unknown
 
 function configModel(model: AgyModel): Record<string, unknown> {
   const variants = modelVariants(model);
+  const metadata = researchedMetadataFor(model);
   return {
     name: model.name,
     reasoning: Object.keys(variants).length > 0,
@@ -69,6 +73,7 @@ function configModel(model: AgyModel): Record<string, unknown> {
     attachment: false,
     modalities: { input: ["text"], output: ["text"] },
     capabilities: { tools: false, input: ["text"], output: ["text"] },
+    ...(metadata ? { limit: { context: metadata.context, output: metadata.output } } : {}),
     options: { includeUsage: true },
     variants,
   };

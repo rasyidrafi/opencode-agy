@@ -25,8 +25,10 @@ The plugin provides:
 
 The official `agy models` output currently provides model slugs, display names,
 and effort tiers, but does not publish context-window or maximum-output-token
-limits. The plugin therefore leaves those metadata fields unset rather than
-claiming unsupported `1M`/`64K` limits.
+limits. For canonical model matches, the plugin uses a curated metadata table
+backed by Models.dev and Google's public Gemini API documentation; unknown
+models leave limits unset. These are model-family facts, not a claim that every
+Antigravity subscription route exposes the same provider limits.
 
 The plugin never reads, parses, copies, refreshes, stores, or logs OAuth
 credentials. The child process inherits the user's environment so the

@@ -22,12 +22,25 @@ export const DEFAULT_SSE_HEARTBEAT_MS = 5_000;
 export const MODEL_HEADER = "x-opencode-agy-model";
 export const EFFORT_HEADER = "x-opencode-agy-effort";
 export const AGENT_HEADER = "x-opencode-agy-agent";
+export const OPENCODE_AGENT_HEADER = "x-opencode-agy-opencode-agent";
 export const SESSION_HEADER = "x-opencode-agy-session";
 export const DIRECTORY_HEADER = "x-opencode-agy-directory";
 export const REQUEST_TOKEN_HEADER = "x-opencode-agy-token";
 
 export const SUPPORTED_EFFORTS = ["low", "medium", "high"] as const;
 export type AgyEffort = (typeof SUPPORTED_EFFORTS)[number];
+
+export type AgyExecutionMode = "accept-edits" | "plan";
+
+/** Explore is a read-only OpenCode agent, so keep its CLI worker read-only. */
+export function modeForOpenCodeAgent(
+  openCodeAgent: string | undefined,
+  configuredMode: string | undefined,
+): AgyExecutionMode | undefined {
+  if (openCodeAgent?.trim().toLowerCase() === "explore") return "plan";
+  if (configuredMode === "accept-edits" || configuredMode === "plan") return configuredMode;
+  return undefined;
+}
 
 export function envNumber(name: string, fallback: number, minimum = 0): number {
   const value = Number(process.env[name]);

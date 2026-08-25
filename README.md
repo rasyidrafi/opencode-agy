@@ -146,6 +146,12 @@ built-in tools, permissions, MCP configuration, and subagents remain owned by
 `agy`. Tool and subagent events are surfaced as compact reasoning telemetry;
 they are never presented as tools executed by OpenCode.
 
+The OpenCode `explore` agent is automatically launched with `agy --mode plan`.
+This is required because headless `agy` cannot wait for an interactive tool
+permission prompt; it preserves read-only exploration without enabling the
+global dangerous-permissions flag. Other agents retain the configured mode and
+permission behavior.
+
 ### Attachment evaluation
 
 The documented headless `stream-json` input accepts strings and text blocks;

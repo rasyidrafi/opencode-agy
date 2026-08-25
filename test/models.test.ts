@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { fallbackAgyModelCatalog, parseModelOutput, resolveAgyModelSelection } from "../src/models.js";
 import { buildProviderModels } from "../src/index.js";
 import { researchedMetadataFor } from "../src/model-metadata.js";
+import { modeForOpenCodeAgent } from "../src/constants.js";
 
 describe("agy model discovery", () => {
   test("parses current tabular output", () => {
@@ -32,5 +33,12 @@ describe("agy model discovery", () => {
     const models = buildProviderModels(catalog, "http://127.0.0.1:1/v1");
     expect(models["gemini-3.7-flash"].limit).toEqual({ context: 1_048_576, output: 65_536 });
     expect(researchedMetadataFor({ id: "gpt-oss-120b-medium", name: "GPT-OSS", cliModel: "gpt-oss-120b-medium", family: "gpt-oss-120b", effort: "medium" })?.output).toBe(32_768);
+  });
+
+  test("keeps the OpenCode explore agent in read-only CLI plan mode", () => {
+    expect(modeForOpenCodeAgent("explore", undefined)).toBe("plan");
+    expect(modeForOpenCodeAgent("EXPLORE", "accept-edits")).toBe("plan");
+    expect(modeForOpenCodeAgent("general", "accept-edits")).toBe("accept-edits");
+    expect(modeForOpenCodeAgent(undefined, undefined)).toBeUndefined();
   });
 });

@@ -10,7 +10,7 @@ describe("non-secret session persistence", () => {
     process.env.OPENCODE_AGY_DATA_DIR = directory;
     const store = new SessionStore();
     await store.set("hashed-session", {
-      conversationId: "conversation-id",
+      sessionId: "session-id",
       model: "model",
       effort: "low",
       cwd: "/workspace",
@@ -20,7 +20,7 @@ describe("non-secret session persistence", () => {
       lastUsedAt: Date.now(),
     });
     const raw = JSON.parse(await readFile(join(directory, "sessions.json"), "utf8"));
-    expect(raw["hashed-session"].conversationId).toBe("conversation-id");
+    expect(raw["hashed-session"].sessionId).toBe("session-id");
     expect(JSON.stringify(raw)).not.toContain("refresh");
     expect(JSON.stringify(raw)).not.toContain("access");
     expect((await stat(directory)).mode & 0o777).toBe(0o700);

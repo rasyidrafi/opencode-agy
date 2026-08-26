@@ -1,23 +1,21 @@
 import type { Hooks, Plugin, PluginInput } from "@opencode-ai/plugin";
 import {
-  AGENT_HEADER,
   DIRECTORY_HEADER,
   EFFORT_HEADER,
   LOCAL_API_KEY,
   MODEL_HEADER,
-  OPENAI_COMPATIBLE_NPM,
+  ANTHROPIC_NPM,
   PROVIDER_ID,
   PROVIDER_NAME,
   SESSION_HEADER,
 } from "./constants.js";
-import { detectAgy, resetAgyDetectionCache } from "./cli-detect.js";
-import { installOfficialAgy } from "./cli-install.js";
+import { detectAcpServer } from "./acp-detect.js";
 import { warn } from "./log.js";
 import {
-  discoverAgyModels,
-  fallbackAgyModelCatalog,
-  type AgyModel,
-  type AgyModelCatalog,
+  acpModelCatalog,
+  fallbackAcpModelCatalog,
+  type AcpModel,
+  type AcpModelCatalog,
 } from "./models.js";
 import { getProxyBaseUrl, startProxy, stopProxy } from "./proxy.js";
 import { researchedMetadataFor } from "./model-metadata.js";
@@ -26,32 +24,32 @@ function zeroCost() {
   return { input: 0, output: 0, cache: { read: 0, write: 0 } };
 }
 
-function modelVariants(model: AgyModel): Record<string, Record<string, unknown>> {
+function modelVariants(model: AcpModel): Record<string, Record<string, unknown>> {
   if (!model.variants) return {};
   return Object.fromEntries(
     Object.entries(model.variants).map(([effort, value]) => [effort, { effort: value.effort }]),
   );
 }
 
-function providerModel(model: AgyModel, baseURL: string): Record<string, unknown> {
+function providerModel(model: AcpModel, baseURL: string): Record<string, unknown> {
   const variants = modelVariants(model);
   const metadata = researchedMetadataFor(model);
   return {
     id: model.id,
     providerID: PROVIDER_ID,
-    api: { id: model.id, url: baseURL, npm: OPENAI_COMPATIBLE_NPM },
+    api: { id: model.id, url: baseURL, npm: ANTHROPIC_NPM },
     name: model.name,
     family: model.family,
     capabilities: {
       temperature: false,
       reasoning: Object.keys(variants).length > 0,
-      attachment: false,
+      attachment: true,
       toolcall: false,
-      input: { text: true, audio: false, image: false, video: false, pdf: false },
+      input: { text: true, audio: true, image: true, video: false, pdf: false },
       output: { text: true, audio: false, image: false, video: false, pdf: false },
-      interleaved: false,
+      interleaved: true,
     },
-    modalities: { input: ["text"], output: ["text"] },
+    modalities: { input: ["text", "image", "audio"], output: ["text"] },
     cost: zeroCost(),
     ...(metadata ? { limit: { context: metadata.context, output: metadata.output } } : {}),
     status: "active",
@@ -62,28 +60,29 @@ function providerModel(model: AgyModel, baseURL: string): Record<string, unknown
   };
 }
 
-function configModel(model: AgyModel): Record<string, unknown> {
+function configModel(model: AcpModel): Record<string, unknown> {
   const variants = modelVariants(model);
   const metadata = researchedMetadataFor(model);
   return {
     name: model.name,
     reasoning: Object.keys(variants).length > 0,
+    interleaved: true,
     temperature: false,
     tool_call: false,
-    attachment: false,
-    modalities: { input: ["text"], output: ["text"] },
-    capabilities: { tools: false, input: ["text"], output: ["text"] },
+    attachment: true,
+    modalities: { input: ["text", "image", "audio"], output: ["text"] },
+    capabilities: { tools: false, input: ["text", "image", "audio"], output: ["text"] },
     ...(metadata ? { limit: { context: metadata.context, output: metadata.output } } : {}),
     options: { includeUsage: true },
     variants,
   };
 }
 
-export function buildProviderModels(catalog: AgyModelCatalog, baseURL: string): Record<string, Record<string, unknown>> {
+export function buildProviderModels(catalog: AcpModelCatalog, baseURL: string): Record<string, Record<string, unknown>> {
   return Object.fromEntries(catalog.models.map((model) => [model.id, providerModel(model, baseURL)]));
 }
 
-function ensureProviderConfig(config: Record<string, any>, catalog: AgyModelCatalog): void {
+function ensureProviderConfig(config: Record<string, any>, catalog: AcpModelCatalog): void {
   if (!config.provider || typeof config.provider !== "object") config.provider = {};
   const existing = config.provider[PROVIDER_ID] && typeof config.provider[PROVIDER_ID] === "object"
     ? config.provider[PROVIDER_ID]
@@ -95,7 +94,7 @@ function ensureProviderConfig(config: Record<string, any>, catalog: AgyModelCata
   config.provider[PROVIDER_ID] = {
     ...existing,
     name: typeof existing.name === "string" && existing.name.trim() ? existing.name : PROVIDER_NAME,
-    npm: existing.npm ?? OPENAI_COMPATIBLE_NPM,
+    npm: ANTHROPIC_NPM,
     options: {
       ...existingOptions,
       // The only key sent to the local adapter is a fixed non-secret marker.
@@ -107,11 +106,12 @@ function ensureProviderConfig(config: Record<string, any>, catalog: AgyModelCata
   };
 }
 
-async function currentCatalog(directory: string): Promise<AgyModelCatalog> {
+async function currentCatalog(directory: string): Promise<AcpModelCatalog> {
   try {
-    return await discoverAgyModels(false, directory);
+    const detection = await detectAcpServer();
+    return acpModelCatalog(detection.executable, null);
   } catch {
-    return fallbackAgyModelCatalog();
+    return fallbackAcpModelCatalog();
   }
 }
 
@@ -127,19 +127,20 @@ async function ensureLocalProviderMarker(client: unknown, directory: string): Pr
       body: { type: "api", key: LOCAL_API_KEY },
     });
   } catch (error) {
-    warn("could not persist the non-secret agy local provider marker", { kind: error instanceof Error ? error.name : "unknown" });
+    warn("could not persist the non-secret Antigravity ACP local provider marker", { kind: error instanceof Error ? error.name : "unknown" });
   }
 }
 
 /**
- * OpenCode plugin entrypoint. Authentication remains entirely inside the
- * official `agy` process; this hook only publishes a local provider adapter.
+ * OpenCode plugin entrypoint. Authentication remains inside the official
+ * Antigravity ACP server. The worker may reuse the official CLI's local OAuth
+ * cache so users do not need to sign in twice.
  */
 export const AntigravityCliPlugin: Plugin = async (input: PluginInput): Promise<Hooks> => {
   try {
     await startProxy(input.directory);
   } catch (error) {
-    warn("could not start the agy proxy during plugin initialization", { kind: error instanceof Error ? error.name : "unknown" });
+    warn("could not start the Antigravity ACP proxy during plugin initialization", { kind: error instanceof Error ? error.name : "unknown" });
   }
 
   return {
@@ -157,15 +158,12 @@ export const AntigravityCliPlugin: Plugin = async (input: PluginInput): Promise<
       if (variant) output.headers[EFFORT_HEADER] = variant;
       output.headers[DIRECTORY_HEADER] = input.directory;
       output.headers[SESSION_HEADER] = hookInput.sessionID;
-      const options = hookInput.provider.options;
-      const agent = typeof options.agyAgent === "string" ? options.agyAgent : undefined;
-      if (agent) output.headers[AGENT_HEADER] = agent;
     },
 
     "chat.params": async (hookInput, output) => {
       if (hookInput.model.providerID !== PROVIDER_ID) return;
-      // The CLI owns reasoning effort. Do not let an OpenAI adapter invent a
-      // temperature or provider-native reasoning parameter.
+      // ACP owns reasoning configuration. Do not let the provider adapter invent
+      // a temperature or provider-native reasoning parameter.
       delete output.options.reasoningEffort;
       delete output.options.temperature;
     },
@@ -180,38 +178,43 @@ export const AntigravityCliPlugin: Plugin = async (input: PluginInput): Promise<
     },
 
     // This is deliberately an API method, not an OAuth method. It stores only
-    // the fixed local marker and tells the user to authenticate with agy.
+    // the fixed local marker and tells the user to authenticate the official
+    // ACP server out of band.
     auth: {
       provider: PROVIDER_ID,
       methods: [
         {
           type: "api",
-          label: "Use the authenticated agy CLI",
-          async authorize() {
-            await detectAgy();
+          label: "Use the authenticated Antigravity ACP server",
+          prompts: [{
+            type: "select",
+            key: "method",
+            message: "Antigravity ACP authentication method",
+            options: [
+              { label: "Google account", value: "oauth-personal", hint: "Personal Google account" },
+              { label: "Gemini Enterprise", value: "oauth-business", hint: "Enterprise Google login" },
+              { label: "Gemini API key", value: "gemini-api-key", hint: "Uses the official ACP server's API-key flow" },
+              { label: "Agent Platform", value: "agent-platform", hint: "Uses ADC or an Agent Platform key" },
+            ],
+          }],
+          async authorize(inputs = {}) {
+            const detection = await detectAcpServer();
+            const method = typeof inputs.method === "string" && inputs.method.trim() ? inputs.method.trim() : "oauth-personal";
+            const { createAcpWorker } = await import("./acp-process.js");
+            const worker = await createAcpWorker({
+              cwd: input.directory,
+              executable: detection.executable,
+              executableArgs: detection.args,
+              authMethod: method,
+              skipSession: true,
+            });
+            await worker.stop(true);
             return {
               type: "success" as const,
               key: LOCAL_API_KEY,
               provider: PROVIDER_ID,
               metadata: {
-                instructions: "Run agy interactively once in the project to complete official Google sign-in.",
-              },
-            };
-          },
-        },
-        {
-          type: "api",
-          label: "Install the official agy CLI",
-          async authorize() {
-            await installOfficialAgy();
-            resetAgyDetectionCache();
-            await detectAgy(true);
-            return {
-              type: "success" as const,
-              key: LOCAL_API_KEY,
-              provider: PROVIDER_ID,
-              metadata: {
-                instructions: "The official agy CLI was installed. Run agy once interactively to authenticate.",
+                instructions: `Authenticated the official ACP server using ${method}.`,
               },
             };
           },
@@ -220,13 +223,13 @@ export const AntigravityCliPlugin: Plugin = async (input: PluginInput): Promise<
     },
 
     async dispose() {
-      await stopProxy();
+      await stopProxy(input.directory);
     },
   };
 };
 
-export { discoverAgyModels, fallbackAgyModelCatalog } from "./models.js";
-export { detectAgy } from "./cli-detect.js";
+export { acpModelCatalog, fallbackAcpModelCatalog } from "./models.js";
+export { detectAcpServer } from "./acp-detect.js";
 export {
   getProxyBaseUrl,
   getProxyPort,
@@ -236,6 +239,5 @@ export {
   stopProxy,
 } from "./proxy.js";
 export { sessionPool } from "./session-pool.js";
-export { getAgyUsage, resetAgyUsageCache } from "./agy-usage.js";
 
 export default AntigravityCliPlugin;

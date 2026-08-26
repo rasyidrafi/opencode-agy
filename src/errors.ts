@@ -76,7 +76,7 @@ export class UnsupportedMediaError extends AgyError {
   constructor(kind: string) {
     super(
       "unsupported",
-      `Unsupported OpenCode content part type "${kind}". This provider currently accepts text only.`,
+       `Unsupported OpenCode content part type "${kind}" for the official Antigravity ACP server.`,
       { code: "agy_unsupported_content" },
     );
     this.name = "UnsupportedMediaError";
@@ -101,53 +101,10 @@ export class AgyAbortError extends AgyError {
   }
 }
 
-export function asAgyError(error: unknown, fallback = "Antigravity CLI request failed"): AgyError {
+export function asAgyError(error: unknown, fallback = "Antigravity ACP request failed"): AgyError {
   if (error instanceof AgyError) return error;
   if (error instanceof Error) return new AgyError("internal", error.message || fallback, { cause: error });
   return new AgyError("internal", fallback, { details: { error: String(error) } });
-}
-
-export function classifyAgyText(text: string): AgyFailureKind {
-  const value = text.toLowerCase();
-  if (/authentication required|not authenticated|unauthenticated|sign[- ]?in|login|credential|oauth/.test(value)) {
-    return "auth";
-  }
-  if (/quota|rate limit|rate-limit|too many requests|usage limit|credits exhausted|resource exhausted/.test(value)) {
-    return "quota";
-  }
-  if (/unknown model|invalid model|model .*not recognized|not a known model/.test(value)) {
-    return "unknown_model";
-  }
-  if (/timeout|timed out|deadline exceeded|stall/.test(value)) return "timeout";
-  if (/malformed|invalid json|unsupported input|protocol|stream-json/.test(value)) return "protocol";
-  return "process";
-}
-
-export function failureFromCliResult(result: {
-  status?: unknown;
-  error?: unknown;
-  response?: unknown;
-}): AgyError | undefined {
-  const status = typeof result.status === "string" ? result.status.toUpperCase() : "";
-  if (status === "SUCCESS") return undefined;
-  if (status === "CANCELED" || status === "CANCELLED") {
-    return new AgyError(
-      "process",
-      "The Antigravity CLI canceled the turn. Plugin-launched workers use --dangerously-skip-permissions because headless mode cannot approve interactive tool prompts.",
-      { code: "agy_process", retryable: false },
-    );
-  }
-  const message =
-    typeof result.error === "string" && result.error.trim()
-      ? result.error.trim()
-      : typeof result.response === "string" && result.response.trim()
-        ? result.response.trim()
-        : `Antigravity CLI returned status ${status || "ERROR"}`;
-  const kind = classifyAgyText(message);
-  return new AgyError(kind, message, {
-    code: `agy_${kind}`,
-    retryable: kind === "quota" || kind === "timeout",
-  });
 }
 
 export function retryAfterSeconds(error: AgyError): number | undefined {

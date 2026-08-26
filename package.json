@@ -1,7 +1,7 @@
 {
   "name": "opencode-agy",
   "version": "0.1.0",
-  "description": "OpenCode provider adapter for Google's official Antigravity agy CLI",
+  "description": "OpenCode provider adapter for Google's official Antigravity ACP server",
   "license": "MIT",
   "type": "module",
   "main": "./opencode-agy.js",
@@ -17,18 +17,18 @@
   "files": [
     "dist",
     "opencode-agy.js",
-    "README.md",
-    "PLAN.md"
+    "README.md"
   ],
   "scripts": {
     "prebuild": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
     "build": "tsc -p tsconfig.json",
     "pretest": "npm run build",
     "test": "bun test test",
-    "test:live": "OPENCODE_AGY_LIVE=1 bun test test/agy-live.test.ts",
+    "test:live": "OPENCODE_AGY_ACP_LIVE=1 bun test test/acp-live.test.ts",
     "check": "npm run build && bun test test"
   },
   "dependencies": {
+    "@agentclientprotocol/sdk": "^1.4.0",
     "@opencode-ai/plugin": "^1.18.23"
   },
   "devDependencies": {
@@ -47,7 +47,7 @@
     "opencode-plugin",
     "antigravity",
     "agy",
-    "openai-compatible",
+    "anthropic-messages",
     "google"
   ]
 }

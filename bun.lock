@@ -5,6 +5,7 @@
     "": {
       "name": "opencode-agy",
       "dependencies": {
+        "@agentclientprotocol/sdk": "^1.4.0",
         "@opencode-ai/plugin": "^1.18.23",
       },
       "devDependencies": {
@@ -15,6 +16,8 @@
     },
   },
   "packages": {
+    "@agentclientprotocol/sdk": ["@agentclientprotocol/sdk@1.4.0", "", { "peerDependencies": { "zod": "^3.25.0 || ^4.0.0" } }, "sha512-/eufudw+aFY1LKLolT6yFE6UMmYRl7fMJ/DEONSIyR6wI3slHWITBsANRGqXEY8FRzqUxwh7QEaGiZHcJPVThg=="],
+
     "@ai-sdk/provider": ["@ai-sdk/provider@3.0.8", "", { "dependencies": { "json-schema": "^0.4.0" } }, "sha512-oGMAgGoQdBXbZqNG0Ze56CHjDZ1IDYOwGYxYjO5KLSlz5HiNQ9udIXsPZ61VWaHGZ5XW/jyjmr6t2xz2jGVwbQ=="],
 
     "@msgpackr-extract/msgpackr-extract-darwin-arm64": ["@msgpackr-extract/msgpackr-extract-darwin-arm64@3.0.4", "", { "os": "darwin", "cpu": "arm64" }, "sha512-LCkGo6JDfaBhgST7UpPWgNgLINpcpabaHfyz5OBx75nUYxBsaEPxjnyNjWpeb/xBup/682QnBfRBy2/LvPutZQ=="],

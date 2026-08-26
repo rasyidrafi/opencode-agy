@@ -1,15 +1,15 @@
-import { extractTextContent, type OpenAIMessage } from "./prompt.js";
+import { extractTextContent, type HostMessage } from "./prompt.js";
 
 export type MetaRequestKind = "title" | "summary" | null;
 
-function textForRole(messages: OpenAIMessage[], role: string): string {
+function textForRole(messages: HostMessage[], role: string): string {
   return messages
     .filter((message) => message.role === role)
     .map((message) => String(message.content ?? ""))
     .join("\n");
 }
 
-export function metaSystemPrompt(messages: OpenAIMessage[]): string {
+export function metaSystemPrompt(messages: HostMessage[]): string {
   return messages
     .filter((message) => message.role === "system")
     .map((message) => extractTextContent(message.content))
@@ -17,7 +17,7 @@ export function metaSystemPrompt(messages: OpenAIMessage[]): string {
     .toLowerCase();
 }
 
-export function isTitleGenerationRequest(messages: OpenAIMessage[]): boolean {
+export function isTitleGenerationRequest(messages: HostMessage[]): boolean {
   const system = metaSystemPrompt(messages);
   return system.includes("title generator") ||
     system.includes("generate a short title") ||
@@ -25,7 +25,7 @@ export function isTitleGenerationRequest(messages: OpenAIMessage[]): boolean {
     system.includes("output only a thread title");
 }
 
-export function isSummaryGenerationRequest(messages: OpenAIMessage[]): boolean {
+export function isSummaryGenerationRequest(messages: HostMessage[]): boolean {
   const system = metaSystemPrompt(messages);
   if (system.includes("anchored context summarization") ||
     system.includes("summarizing, compacting, or merging context") ||
@@ -40,7 +40,7 @@ export function isSummaryGenerationRequest(messages: OpenAIMessage[]): boolean {
     user.includes("<previous-summary>");
 }
 
-export function detectMetaRequestKind(messages: OpenAIMessage[]): MetaRequestKind {
+export function detectMetaRequestKind(messages: HostMessage[]): MetaRequestKind {
   if (isTitleGenerationRequest(messages)) return "title";
   if (isSummaryGenerationRequest(messages)) return "summary";
   return null;

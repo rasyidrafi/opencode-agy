@@ -1,192 +1,131 @@
 # opencode-agy
 
-`opencode-agy` is an OpenCode provider plugin that runs Antigravity through
-Google's official `agy` executable. It does **not** implement Antigravity's
-private HTTP protocol and it does not handle Google credentials.
-
-## What it does
+An OpenCode provider plugin for Google's official Antigravity ACP server.
 
 ```text
-OpenCode → localhost OpenAI-compatible proxy → agy NDJSON subprocess → Antigravity
+OpenCode → loopback Anthropic Messages proxy → ACP JSON-RPC client →
+agy_acp_server.par
 ```
-
-The plugin provides:
-
-- text streaming and non-streaming `/v1/chat/completions`;
-- dynamic model discovery from `agy models` (including effort variants);
-- low/medium/high effort selection;
-- one persistent `agy` worker per OpenCode session;
-- conversation resume using only the CLI's conversation ID;
-- bounded history transfer when a saved conversation is unavailable;
-- usage, Antigravity tool activity, and subagent activity as non-tool telemetry;
-- bounded subprocess I/O, backpressure, cancellation, timeouts, protocol checks,
-  truthful HTTP errors, and redacted diagnostics;
-- text-only capability declarations.
-
-The official `agy models` output currently provides model slugs, display names,
-and effort tiers, but does not publish context-window or maximum-output-token
-limits. For canonical model matches, the plugin uses a curated metadata table
-backed by Models.dev and Google's public Gemini API documentation; unknown
-models leave limits unset. These are model-family facts, not a claim that every
-Antigravity subscription route exposes the same provider limits.
-
-The plugin never reads, parses, copies, refreshes, stores, or logs OAuth
-credentials. The child process inherits the user's environment so the
-official CLI can use its own documented authentication and API-key modes.
 
 ## Requirements
 
-- OpenCode with the external plugin API;
-- Bun (the OpenCode plugin runtime);
-- Google's official Antigravity CLI `agy` 1.1.8 or newer, on `PATH` or in a
-  documented install location;
-- an `agy` session authenticated independently of OpenCode.
+- OpenCode;
+- Bun;
+- Google's `agy_acp_server.par` and the accompanying `localharness_external`;
+- an authenticated ACP server session.
 
-The implementation was exercised against the installed `agy` 1.1.20. The
-provider records the observed CLI version in `/health` and session metadata.
+The official server is listed in the [ACP Registry](https://github.com/agentclientprotocol/registry/tree/main/antigravity-acp).
 
-## Install the official CLI and authenticate
+## Install
 
-Install only from Google's documented installer:
+Download the ACP server archive for your platform. Keep these files together:
 
-```sh
-# macOS/Linux
-curl -fsSL https://antigravity.google/cli/install.sh | bash
-
-# then authenticate in the project once
-agy
+```text
+agy_acp_server.par
+localharness_external
 ```
 
-On Windows, use Google's documented PowerShell or CMD installer. Do not put a
-Google OAuth token in OpenCode configuration. `agy` itself owns keyring/session
-storage and headless requests use the CLI's cached authentication.
-
-## Install the plugin
-
-From this checkout:
+Set the server path, or put it on `PATH`:
 
 ```sh
-bun install
-bun run build
+export OPENCODE_AGY_ACP_PATH=/absolute/path/to/agy_acp_server.par
 ```
 
-Register the built package in `~/.config/opencode/opencode.json` (or the
-project config):
+On Linux the registry argument `--uid=` is supplied automatically. Custom
+arguments can be provided as JSON:
+
+```sh
+export OPENCODE_AGY_ACP_ARGS='["--uid="]'
+```
+
+Register the plugin in `~/.config/opencode/opencode.jsonc`:
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["/absolute/path/to/opencode-agy"]
+  "plugin": ["/absolute/path/to/opencode-agy/opencode-agy.js"]
 }
 ```
 
-Restart OpenCode after changing plugin configuration. Select the
-`antigravity-cli` provider and one of the discovered models.
+Restart OpenCode after changing plugin configuration.
 
-There is no OpenCode-owned OAuth flow. The API auth action, when shown by a
-host, only records the fixed local marker `opencode-agy-local`; it does not
-represent a Google credential. If authentication fails, run `agy` interactively
-in the target project and complete the official sign-in, then retry.
+## Authentication
 
-An explicit “Install the official agy CLI” action is also available through the
-provider auth surface. It runs only Google's fixed installer commands and is
-never invoked during normal provider loading.
+The ACP server advertises these methods:
+
+- `oauth-personal`;
+- `oauth-business`;
+- `gemini-api-key`;
+- `agent-platform`.
+
+Use the provider authentication action in OpenCode, or set a method for the
+next ACP worker:
+
+```sh
+export OPENCODE_AGY_ACP_AUTH_METHOD=oauth-personal
+```
+
+The plugin reuses the official CLI's existing OAuth login when it finds
+`~/.gemini/antigravity-cli/antigravity-oauth-token` (or the equivalent path
+under `GEMINI_HOME`). It seeds the ACP server's local credential file so the
+first OpenCode request does not start a second browser login. Credentials stay
+on the local machine and are not sent through the OpenCode proxy.
 
 ## Configuration
 
-All optional settings are explicit environment/configuration choices:
-
 | Variable | Purpose |
-| --- | --- |
-| `OPENCODE_AGY_PATH` | Explicit path to the official executable |
-| `OPENCODE_AGY_PROXY_PORT` | Pin the loopback port; default is ephemeral |
-| `OPENCODE_AGY_DEBUG=1` | Enable metadata-only debug logs |
-| `OPENCODE_AGY_MODE=accept-edits\|plan` | Select a documented CLI mode |
-| `OPENCODE_AGY_SANDBOX=1` | Pass the documented `--sandbox` flag |
-| `OPENCODE_AGY_AGENT` | Select a documented `agy` agent |
-| `OPENCODE_AGY_HISTORY_MAX_CHARS` | Bound fallback host-history transfer |
-| `OPENCODE_AGY_MAX_REQUEST_BYTES` | Bound JSON request bodies |
-| `OPENCODE_AGY_REQUEST_READ_TIMEOUT_MS` | Bound slow request-body uploads |
-| `OPENCODE_AGY_UTILITY_MAX_CHARS` | Bound title/summary one-shot argv input |
-| `OPENCODE_AGY_TURN_STALL_MS` | Per-turn no-output watchdog |
-| `OPENCODE_AGY_PRINT_TIMEOUT_MS` | CLI print timeout |
-| `OPENCODE_AGY_IDLE_WORKER_MS` | Idle worker cleanup interval |
-| `OPENCODE_AGY_MAX_SESSIONS` | Maximum in-memory session workers |
-| `OPENCODE_AGY_TOOL_BRIDGE=1` | Experimental host-tool bridge; disabled by default |
-| `OPENCODE_AGY_BRIDGE_CALL_TIMEOUT_MS` | Timeout for an experimental bridged tool call |
-| `OPENCODE_AGY_DATA_DIR` | Override non-secret session metadata directory |
+|---|---|
+| `OPENCODE_AGY_ACP_PATH` | ACP server executable path |
+| `OPENCODE_AGY_ACP_ARGS` | JSON array of ACP server arguments |
+| `OPENCODE_AGY_ACP_AUTH_METHOD` | ACP authentication method |
+| `OPENCODE_AGY_ACP_PERMISSION=allow-always\|allow-once\|deny` | Automatic ACP permission response; default `allow-always` |
+| `OPENCODE_AGY_MODE=plan\|accept-edits` | ACP session mode when advertised |
+| `OPENCODE_AGY_PROXY_PORT` | Loopback proxy port; default ephemeral |
+| `OPENCODE_AGY_DATA_DIR` | Session metadata directory |
+| `OPENCODE_AGY_DEBUG=1` | Metadata-only debug logging |
+| `OPENCODE_AGY_MAX_REQUEST_BYTES` | Maximum request size |
+| `OPENCODE_AGY_TURN_STALL_MS` | No-update watchdog |
+| `OPENCODE_AGY_PRINT_TIMEOUT_MS` | ACP request timeout |
+| `OPENCODE_AGY_IDLE_WORKER_MS` | Idle session cleanup interval |
+| `OPENCODE_AGY_MAX_SESSIONS` | Maximum concurrent ACP sessions |
 
-The default proxy bind address is `127.0.0.1` and its port is ephemeral. The
-proxy requires the fixed non-secret local marker (`Bearer opencode-agy-local`)
-for model requests; this is not a Google API key and does not grant access to
-the CLI outside the loopback adapter.
+## Supported input
 
-### Official quota usage
+ACP text, image, and audio blocks are supported. Images and audio may be sent
+as base64 data URLs or local files inside the configured workspace. Remote URLs,
+PDFs, and video are rejected.
 
-The plugin also exposes `GET /v1/usage` (with the same local marker). It runs
-the documented `agy -p /usage --output-format json` command and returns the
-CLI's real five-hour and weekly remaining windows for Gemini and Claude/GPT
-model groups. It does not invent prices or read credentials.
+The provider reports native ACP image/audio input capability. Antigravity tool
+activity is streamed as reasoning/status content because OpenCode's ordinary
+provider tool loop is separate from the ACP agent tool loop.
 
-OpenChamber's Usage panel does not currently discover arbitrary OpenCode
-plugin endpoints. Its Command Code card comes from an OpenChamber-side,
-hard-coded `command-code` quota provider that calls Command Code's billing API.
-Showing Antigravity in that panel requires adding an OpenChamber quota adapter
-for `antigravity-cli`; installing this OpenCode plugin alone cannot modify that
-registry.
+Filesystem requests are restricted to the configured workspace. Terminal
+requests use sanitized environment variables and are controlled by the ACP
+permission policy. The adapter is not an operating-system sandbox.
 
-## MVP boundaries
+## Local endpoints
 
-The MVP intentionally rejects image, PDF, audio, video, arbitrary content
-parts, host tool callbacks, and OpenCode tool-call continuation. OpenCode may
-still include tool definitions in a request; the adapter ignores those
-definitions and never executes or forwards them as callbacks. Antigravity's own
-built-in tools, permissions, MCP configuration, and subagents remain owned by
-`agy`. Tool and subagent events are surfaced as compact reasoning telemetry;
-they are never presented as tools executed by OpenCode.
+- `GET /health`;
+- `GET /v1/models`;
+- `GET /v1/usage`;
+- `POST /v1/messages`.
 
-Every plugin-launched `agy` worker always receives
-`--dangerously-skip-permissions`, regardless of whether its workflow mode is
-`plan` or `accept-edits`. The headless stream protocol cannot service an
-interactive permission prompt, and Antigravity's internal tools are not
-mediated by OpenCode's per-tool permission rules. Use `OPENCODE_AGY_SANDBOX=1`
-if the CLI sandbox is also desired.
-
-### Attachment evaluation
-
-The documented headless `stream-json` input accepts strings and text blocks;
-the CLI's image/video clipboard support is interactive and does not define a
-portable headless binary/file block. Local attachment materialization is
-therefore deliberately deferred. The adapter rejects media, never copies a
-file into the project, and never forwards or fetches remote URLs.
-
-Titles/summaries and an OpenCode-to-MCP tool bridge are not enabled by default.
-The repository contains an experimental, loopback-only bridge design, but it
-is intentionally not enabled: the observed `agy` 1.1.20 build manages MCP
-servers through its user-level registry and does not honor a fresh temporary
-workspace config reliably. The plugin will never call `agy mcp add` or mutate
-that global registry. The bridge is a separate security/lifecycle project and
-should not be enabled until the CLI provides a reliable documented workspace
-configuration path. It should not be added by
-pretending that OpenCode's `tools` array is executable inside this adapter.
+Requests require the loopback marker `x-api-key: opencode-agy-local`.
 
 ## Tests
 
 ```sh
-bun run check
-
-# Requires the locally installed and authenticated official CLI; consumes quota.
-bun run test:live
+npm run check
 ```
 
-The ordinary test suite uses a deterministic fake CLI and does not contact
-Google. Live tests are opt-in.
+The live test requires an authenticated official ACP server:
 
-## Terms and deployment note
+```sh
+OPENCODE_AGY_ACP_LIVE=1 \
+OPENCODE_AGY_ACP_PATH=/absolute/path/to/agy_acp_server.par \
+OPENCODE_AGY_ACP_AUTH_METHOD=oauth-personal \
+npm run test:live
+```
 
-This adapter technically uses the documented `agy` CLI scripting interface.
-That is not a contractual guarantee that a third-party host is permitted by
-current Google Antigravity terms or immune from account action. Review the
-current CLI documentation and terms yourself. For enterprise or production
-workloads, prefer documented Gemini API or Vertex/ADC credentials and an
-officially supported integration.
+Review Google's current [terms](https://antigravity.google/terms) before using
+subscription authentication through a third-party host.

@@ -1,20 +1,30 @@
-import { AgyError, failureFromCliResult } from "./errors.js";
-import type { AgyEvent, AgyResult, AgyStepUpdate, AgyUsage } from "./protocol.js";
+import { AgyAbortError, AgyError } from "./errors.js";
+import type { AcpEvent } from "./protocol.js";
+import type { ContentBlock, PromptResponse, SessionUpdate } from "@agentclientprotocol/sdk";
 
-export type OpenAIUsage = {
-  prompt_tokens: number;
-  completion_tokens: number;
-  total_tokens: number;
-  prompt_tokens_details?: { cached_tokens?: number };
-  completion_tokens_details?: { reasoning_tokens?: number };
+export type AnthropicUsage = {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+  output_tokens_details?: { thinking_tokens?: number };
 };
 
-export type MappedAgyEvent =
+export type AnthropicFinishReason = "end_turn" | "max_tokens" | "stop_sequence";
+export type OrderedSegment = { kind: "text" | "thinking" | "activity"; text: string };
+export type AcpTranslationState = { tools: Map<string, { title: string }> };
+
+export function createAcpTranslationState(): AcpTranslationState {
+  return { tools: new Map() };
+}
+
+export type MappedAcpEvent =
   | { kind: "text"; text: string }
   | { kind: "reasoning"; text: string }
-  | { kind: "usage"; usage: OpenAIUsage }
-  | { kind: "result"; result: AgyResult; response: string; usage?: OpenAIUsage }
-  | { kind: "error"; error: AgyError; usage?: OpenAIUsage }
+  | { kind: "activity"; text: string }
+  | { kind: "usage"; usage: AnthropicUsage }
+  | { kind: "result"; result: PromptResponse; response: string; finishReason: AnthropicFinishReason; usage?: AnthropicUsage }
+  | { kind: "error"; error: AgyError; usage?: AnthropicUsage }
   | { kind: "ignore" };
 
 function nonNegativeInteger(value: unknown): number | undefined {
@@ -22,120 +32,182 @@ function nonNegativeInteger(value: unknown): number | undefined {
   return Math.max(0, Math.floor(value));
 }
 
-export function usageFromAgy(usage: AgyUsage | undefined): OpenAIUsage | undefined {
-  if (!usage) return undefined;
-  const prompt = nonNegativeInteger(usage.input_tokens) ?? 0;
-  const completion = nonNegativeInteger(usage.output_tokens) ?? 0;
-  const thinking = nonNegativeInteger(usage.thinking_tokens);
-  const cached = nonNegativeInteger(usage.cache_read_tokens);
-  const total = nonNegativeInteger(usage.total_tokens) ?? prompt + completion;
-  if (prompt === 0 && completion === 0 && total === 0 && cached === undefined) return undefined;
+export function usageFromAcp(usage: unknown): AnthropicUsage | undefined {
+  if (!usage || typeof usage !== "object") return undefined;
+  const value = usage as Record<string, unknown>;
+  const input = nonNegativeInteger(value.inputTokens ?? value.input_tokens) ?? 0;
+  const output = nonNegativeInteger(value.outputTokens ?? value.output_tokens) ?? 0;
+  const thinking = nonNegativeInteger(value.thoughtTokens ?? value.thinking_tokens ?? value.reasoning_tokens);
+  const cached = nonNegativeInteger(value.cacheReadTokens ?? value.cache_read_tokens ?? value.cachedInputTokens);
+  const created = nonNegativeInteger(value.cacheCreationTokens ?? value.cache_creation_input_tokens);
+  const total = nonNegativeInteger(value.totalTokens ?? value.total_tokens);
+  if (input === 0 && output === 0 && !total && cached === undefined && created === undefined && thinking === undefined) return undefined;
   return {
-    prompt_tokens: prompt,
-    completion_tokens: completion,
-    total_tokens: Math.max(total, prompt + completion),
-    ...(cached !== undefined ? { prompt_tokens_details: { cached_tokens: cached } } : {}),
-    ...(thinking !== undefined ? { completion_tokens_details: { reasoning_tokens: thinking } } : {}),
+    input_tokens: input,
+    output_tokens: output,
+    ...(cached !== undefined ? { cache_read_input_tokens: cached } : {}),
+    ...(created !== undefined ? { cache_creation_input_tokens: created } : {}),
+    ...(thinking !== undefined ? { output_tokens_details: { thinking_tokens: thinking } } : {}),
   };
 }
 
-export function addOpenAIUsage(left: OpenAIUsage | undefined, right: OpenAIUsage | undefined): OpenAIUsage | undefined {
+export function addAnthropicUsage(left: AnthropicUsage | undefined, right: AnthropicUsage | undefined): AnthropicUsage | undefined {
   if (!left) return right;
   if (!right) return left;
-  const cached = (left.prompt_tokens_details?.cached_tokens ?? 0) + (right.prompt_tokens_details?.cached_tokens ?? 0);
-  const reasoning = (left.completion_tokens_details?.reasoning_tokens ?? 0) + (right.completion_tokens_details?.reasoning_tokens ?? 0);
+  const cached = (left.cache_read_input_tokens ?? 0) + (right.cache_read_input_tokens ?? 0);
+  const created = (left.cache_creation_input_tokens ?? 0) + (right.cache_creation_input_tokens ?? 0);
+  const thinking = (left.output_tokens_details?.thinking_tokens ?? 0) + (right.output_tokens_details?.thinking_tokens ?? 0);
   return {
-    prompt_tokens: left.prompt_tokens + right.prompt_tokens,
-    completion_tokens: left.completion_tokens + right.completion_tokens,
-    total_tokens: left.total_tokens + right.total_tokens,
-    ...(cached ? { prompt_tokens_details: { cached_tokens: cached } } : {}),
-    ...(reasoning ? { completion_tokens_details: { reasoning_tokens: reasoning } } : {}),
+    input_tokens: left.input_tokens + right.input_tokens,
+    output_tokens: left.output_tokens + right.output_tokens,
+    ...(cached ? { cache_read_input_tokens: cached } : {}),
+    ...(created ? { cache_creation_input_tokens: created } : {}),
+    ...(thinking ? { output_tokens_details: { thinking_tokens: thinking } } : {}),
   };
 }
 
-function toolStatus(step: AgyStepUpdate): string | undefined {
-  const info = step.tool_info;
-  const name = typeof info?.name === "string" && info.name ? info.name :
-    typeof step.tool_name === "string" && step.tool_name ? step.tool_name : undefined;
-  if (!name && step.step_type !== "tool") return undefined;
-  const state = typeof step.state === "string" ? step.state.toLowerCase() : "";
-  return `[agy tool${name ? `: ${name}` : ""}${state ? ` (${state})` : ""}]\n`;
+function contentText(content: unknown): string {
+  if (!content || typeof content !== "object") return "";
+  const value = content as { type?: unknown; text?: unknown };
+  if (value.type === "text" && typeof value.text === "string") return value.text;
+  if (value.type === "resource") {
+    const resource = (value as unknown as { resource?: { text?: unknown } }).resource;
+    return resource && typeof resource.text === "string" ? resource.text : "";
+  }
+  return "";
 }
 
-function subagentStatus(step: AgyStepUpdate): string | undefined {
-  if (!step.subagent_info) return undefined;
-  const list = Array.isArray(step.subagent_info.subagents) ? step.subagent_info.subagents.length : undefined;
-  return `[agy subagent activity${list === undefined ? "" : ` (${list} subagent${list === 1 ? "" : "s"})`}]\n`;
+function contentTextFromUpdate(update: SessionUpdate): string {
+  return update.sessionUpdate === "agent_message_chunk" || update.sessionUpdate === "agent_thought_chunk"
+    ? contentText(update.content) : "";
 }
 
-export function mapAgyEvent(event: AgyEvent): MappedAgyEvent {
-  if (event.event === "init" || event.event === "unknown") return { kind: "ignore" };
-  if (event.event === "step_update") {
-    const step = event.step_update;
-    if (typeof step.text_delta === "string" && step.text_delta) return { kind: "text", text: step.text_delta };
-    if (typeof step.text === "string" && step.text) return { kind: "text", text: step.text };
-    const tool = toolStatus(step);
-    if (tool) return { kind: "reasoning", text: tool };
-    const subagent = subagentStatus(step);
-    if (subagent) return { kind: "reasoning", text: subagent };
-    const usage = usageFromAgy(step.usage);
-    if (usage) return { kind: "usage", usage };
+function toolContentText(content: unknown): string {
+  if (!content || typeof content !== "object") return "";
+  const value = content as Record<string, unknown>;
+  return value.type === "content" ? contentText(value.content) : contentText(content);
+}
+
+function toolActivity(update: SessionUpdate, state?: AcpTranslationState): string | undefined {
+  if (update.sessionUpdate !== "tool_call" && update.sessionUpdate !== "tool_call_update") return undefined;
+  const value = update as unknown as Record<string, unknown>;
+  const id = typeof value.toolCallId === "string" && value.toolCallId ? value.toolCallId : undefined;
+  const status = typeof value.status === "string" ? value.status.toLowerCase() : "in_progress";
+  const suppliedTitle = typeof value.title === "string" && value.title ? value.title : typeof value.name === "string" && value.name ? value.name : undefined;
+  const known = id ? state?.tools.get(id) : undefined;
+  const title = suppliedTitle ?? known?.title ?? "tool";
+  const output = Array.isArray(value.content) ? value.content.map(toolContentText).filter(Boolean).join("").slice(0, 2_000) : "";
+  if (status === "completed") return undefined;
+  if (status === "failed" || status === "cancelled") {
+    const label = status === "failed" ? "failed" : "cancelled";
+    return `[Antigravity ACP tool ${label}: ${title}]${output ? `\n${output}` : ""}`;
+  }
+  const key = id ?? `title:${title}`;
+  if (state?.tools.has(key)) return undefined;
+  state?.tools.set(key, { title });
+  const running = /^running\b/i.test(title) ? title : `Running ${title}`;
+  return `[Antigravity ACP tool: ${running}]`;
+}
+
+function planActivity(update: SessionUpdate): string | undefined {
+  if (update.sessionUpdate !== "plan" && update.sessionUpdate !== "plan_update") return undefined;
+  const value = update as unknown as Record<string, unknown>;
+  const plan = update.sessionUpdate === "plan" ? value : value.plan && typeof value.plan === "object" ? value.plan as Record<string, unknown> : value;
+  const entries = Array.isArray(plan.entries) ? plan.entries : undefined;
+  if (!entries?.length) return "[Antigravity ACP plan updated]";
+  const lines = entries.map((entry) => {
+    if (!entry || typeof entry !== "object") return "";
+    const item = entry as Record<string, unknown>;
+    return typeof item.content === "string" ? `- [${typeof item.status === "string" ? item.status : "pending"}] ${item.content}` : "";
+  }).filter(Boolean).slice(0, 30);
+  return `[Antigravity ACP plan]\n${lines.join("\n")}`;
+}
+
+function statusActivity(update: SessionUpdate): string | undefined {
+  const value = update as unknown as Record<string, unknown>;
+  switch (update.sessionUpdate) {
+    case "available_commands_update": return "[Antigravity ACP commands updated]";
+    case "current_mode_update": return `[Antigravity ACP mode: ${typeof value.currentModeId === "string" ? value.currentModeId : "updated"}]`;
+    case "config_option_update": return "[Antigravity ACP configuration updated]";
+    case "session_info_update": return typeof value.title === "string" ? `[Antigravity ACP: ${value.title}]` : "[Antigravity ACP session updated]";
+    case "compaction_update":
+    case "compaction_summary_chunk": return "[Antigravity ACP context compacted]";
+    default: return undefined;
+  }
+}
+
+export function mapAcpEvent(event: AcpEvent, state?: AcpTranslationState): MappedAcpEvent {
+  if (event.event === "update") {
+    const update = event.update;
+    if (update.sessionUpdate === "agent_thought_chunk") {
+      const text = contentTextFromUpdate(update);
+      return text ? { kind: "reasoning", text } : { kind: "ignore" };
+    }
+    const text = contentTextFromUpdate(update);
+    if (text) return { kind: "text", text };
+    const tool = toolActivity(update, state);
+    if (tool) return { kind: "activity", text: tool };
+    const plan = planActivity(update);
+    if (plan) return { kind: "activity", text: plan };
+    const status = statusActivity(update);
+    if (status) return { kind: "activity", text: status };
     return { kind: "ignore" };
   }
-  const result = event.result;
-  const usage = usageFromAgy(result.usage);
-  const failure = failureFromCliResult(result);
-  if (failure) return { kind: "error", error: failure, usage };
-  return {
-    kind: "result",
-    result,
-    response: typeof result.response === "string" ? result.response : "",
-    ...(usage ? { usage } : {}),
-  };
+  const usage = usageFromAcp(event.result.usage);
+  if (event.result.stopReason === "cancelled") return { kind: "error", error: new AgyAbortError(), ...(usage ? { usage } : {}) };
+  const finishReason: AnthropicFinishReason = event.result.stopReason === "max_tokens" || event.result.stopReason === "max_turn_requests" ? "max_tokens" : "end_turn";
+  return { kind: "result", result: event.result, response: "", finishReason, ...(usage ? { usage } : {}) };
 }
 
-export function resultFailure(event: AgyEvent): AgyError | undefined {
-  if (event.event !== "result") return undefined;
-  return failureFromCliResult(event.result);
-}
-
-export function isMeaningfulEvent(event: AgyEvent): boolean {
-  const mapped = mapAgyEvent(event);
-  return mapped.kind === "text" || mapped.kind === "reasoning" ||
-    (mapped.kind === "result" && Boolean(mapped.response));
+export function isMeaningfulEvent(event: AcpEvent): boolean {
+  const mapped = mapAcpEvent(event);
+  return mapped.kind === "text" || mapped.kind === "reasoning" || mapped.kind === "activity" || mapped.kind === "result" || mapped.kind === "error";
 }
 
 export type CollectedTurn = {
   content: string;
   reasoning: string;
-  usage?: OpenAIUsage;
-  result: AgyResult;
+  usage?: AnthropicUsage;
+  result: PromptResponse;
+  finishReason: AnthropicFinishReason;
+  segments: OrderedSegment[];
 };
 
-export async function collectTurn(events: AsyncIterable<AgyEvent>): Promise<CollectedTurn> {
-  let streamedText = "";
+export async function collectTurn(events: AsyncIterable<AcpEvent>): Promise<CollectedTurn> {
+  let content = "";
   let reasoning = "";
-  let stepUsage: OpenAIUsage | undefined;
-  let resultUsage: OpenAIUsage | undefined;
-  let result: AgyResult | undefined;
+  let stepUsage: AnthropicUsage | undefined;
+  let resultUsage: AnthropicUsage | undefined;
+  let result: PromptResponse | undefined;
+  let finishReason: AnthropicFinishReason = "end_turn";
+  const segments: OrderedSegment[] = [];
+  const translation = createAcpTranslationState();
   for await (const event of events) {
-    const mapped = mapAgyEvent(event);
-    if (mapped.kind === "text") streamedText += mapped.text;
-    else if (mapped.kind === "reasoning") reasoning += mapped.text;
-    else if (mapped.kind === "usage") stepUsage = addOpenAIUsage(stepUsage, mapped.usage);
+    const mapped = mapAcpEvent(event, translation);
+    if (mapped.kind === "text") {
+      content += mapped.text;
+      const last = segments.at(-1);
+      if (last?.kind === "text") last.text += mapped.text;
+      else segments.push({ kind: "text", text: mapped.text });
+    } else if (mapped.kind === "reasoning") {
+      reasoning += mapped.text;
+      const last = segments.at(-1);
+      if (last?.kind === "thinking") last.text += mapped.text;
+      else segments.push({ kind: "thinking", text: mapped.text });
+    } else if (mapped.kind === "activity") {
+      segments.push({ kind: "activity", text: mapped.text });
+    } else if (mapped.kind === "usage") stepUsage = addAnthropicUsage(stepUsage, mapped.usage);
     else if (mapped.kind === "error") throw mapped.error;
     else if (mapped.kind === "result") {
       result = mapped.result;
       resultUsage = mapped.usage;
+      finishReason = mapped.finishReason;
     }
   }
-  if (!result) throw new AgyError("protocol", "agy ended a turn without a result", { code: "agy_missing_result" });
-  const authoritative = typeof result.response === "string" ? result.response : streamedText;
-  const usage = stepUsage ?? resultUsage;
-  return { content: authoritative, reasoning, ...(usage ? { usage } : {}), result };
+  if (!result) throw new AgyError("protocol", "The ACP agent ended a turn without a result", { code: "agy_acp_missing_result" });
+  return { content, reasoning, ...(stepUsage ?? resultUsage ? { usage: stepUsage ?? resultUsage } : {}), result, finishReason, segments };
 }
 
-/** If a CLI emitted deltas, avoid appending the full result a second time. */
 export function appendResultWithoutDuplication(streamed: string, result: string): string | undefined {
   if (!result) return "";
   if (!streamed) return result;

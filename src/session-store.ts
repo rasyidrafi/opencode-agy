@@ -6,7 +6,7 @@ import { DEFAULT_IDLE_WORKER_TIMEOUT_MS } from "./constants.js";
 import { debug, warn } from "./log.js";
 
 export type SessionRecord = {
-  conversationId: string;
+  sessionId: string;
   model: string;
   effort?: string;
   cwd: string;
@@ -30,7 +30,7 @@ function storePath(): string {
 function validRecord(value: unknown): value is SessionRecord {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
-  return typeof record.conversationId === "string" &&
+  return typeof record.sessionId === "string" &&
     typeof record.model === "string" &&
     typeof record.cwd === "string" &&
     (typeof record.cliVersion === "string" || record.cliVersion === null);
@@ -38,7 +38,7 @@ function validRecord(value: unknown): value is SessionRecord {
 
 function sanitizeRecord(value: SessionRecord): SessionRecord {
   return {
-    conversationId: value.conversationId.slice(0, 200),
+    sessionId: value.sessionId.slice(0, 200),
     model: value.model.slice(0, 200),
     ...(value.effort ? { effort: value.effort.slice(0, 20) } : {}),
     cwd: value.cwd.slice(0, 4_000),
@@ -63,8 +63,8 @@ export class SessionStore {
         const raw = await readFile(storePath(), "utf8");
         const parsed: unknown = JSON.parse(raw);
         if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-          for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
-            if (validRecord(value)) this.records[key] = sanitizeRecord(value);
+           for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+             if (validRecord(value)) this.records[key] = sanitizeRecord(value);
           }
         }
         try {

@@ -4,16 +4,16 @@ import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { SessionPool } from "../src/session-pool.js";
 
-const fixture = join(import.meta.dir, "fixtures", "fake-agy.mjs");
+const fixture = join(import.meta.dir, "fixtures", "fake-acp.mjs");
 
 async function turn(pool: SessionPool, key: string, prompt: string): Promise<string> {
   let response = "";
   for await (const event of pool.turn({
     key,
-    prompt,
+    prompt: [{ type: "text", text: prompt }],
     settings: { cwd: process.cwd(), model: "fake-model-low", executable: fixture },
   })) {
-    if (event.event === "result") response = event.result.response ?? "";
+    if (event.event === "update" && event.update.sessionUpdate === "agent_message_chunk" && event.update.content.type === "text") response += event.update.content.text;
   }
   return response;
 }
@@ -22,6 +22,7 @@ describe("session pool isolation", () => {
   test("keeps independent workers separate", async () => {
     await chmod(fixture, 0o755);
     process.env.OPENCODE_AGY_DATA_DIR = await mkdtemp(join(tmpdir(), "opencode-agy-pool-"));
+    delete process.env.FAKE_ACP_STATE_FILE;
     const pool = new SessionPool({ idleMs: 60_000 });
     try {
       await turn(pool, "session-a", "remember FAKE_MEMORY");
@@ -34,9 +35,10 @@ describe("session pool isolation", () => {
     }
   });
 
-  test("persists a conversation id and resumes it in a new pool", async () => {
+  test("persists an ACP session id and resumes it in a new pool", async () => {
     await chmod(fixture, 0o755);
     process.env.OPENCODE_AGY_DATA_DIR = await mkdtemp(join(tmpdir(), "opencode-agy-resume-"));
+    process.env.FAKE_ACP_STATE_FILE = join(process.env.OPENCODE_AGY_DATA_DIR, "fake-state.json");
     const firstPool = new SessionPool({ idleMs: 60_000 });
     await turn(firstPool, "restart-session", "remember FAKE_MEMORY");
     await firstPool.close();

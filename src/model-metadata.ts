@@ -1,4 +1,4 @@
-import type { AgyModel } from "./models.js";
+import type { AcpModel } from "./models.js";
 
 export type ResearchedModelMetadata = {
   context: number;
@@ -23,10 +23,11 @@ const GOOGLE_MULTIMODAL = ["text", "image", "video", "audio", "pdf"];
 const TEXT_OUTPUT = ["text"];
 
 /**
- * Canonical model facts are deliberately separate from the agy catalog. The
- * CLI lists slugs and names, but does not publish token limits or modality
- * metadata. These entries are only used when the canonical model is
- * unambiguous in models.dev and/or Google's public Gemini API documentation.
+ * Canonical model facts are deliberately separate from the ACP catalog. The
+ * ACP server exposes model choices per session, but does not publish a global
+ * token-limit metadata endpoint. These entries are only used when the
+ * canonical model is unambiguous in models.dev and/or Google's public Gemini
+ * API documentation.
  */
 const RESEARCHED: Record<string, ResearchedModelMetadata> = {
   "gemini-3.7-flash": {
@@ -50,7 +51,7 @@ const RESEARCHED: Record<string, ResearchedModelMetadata> = {
     sources: [`${MODELS_DEV}/google/gemini-3.5-flash/`, `${GOOGLE_API}/whats-new-gemini-3.5`],
     underlying: { input: GOOGLE_MULTIMODAL, output: TEXT_OUTPUT, attachment: true, reasoning: true, toolcall: true, structured: true, temperature: false },
   },
-  // The CLI slug omits the preview suffix used by Google's public API docs.
+  // The catalog slug omits the preview suffix used by Google's public API docs.
   "gemini-3.1-pro-preview": {
     context: 1_048_576,
     output: 65_536,
@@ -81,7 +82,7 @@ const RESEARCHED: Record<string, ResearchedModelMetadata> = {
   },
 };
 
-function canonicalId(model: AgyModel): string {
+function canonicalId(model: AcpModel): string {
   let id = model.id.toLowerCase().replace(/^antigravity-cli\//, "");
   if (model.family) id = model.family.toLowerCase();
   else id = id.replace(/-(?:low|medium|high)$/i, "");
@@ -90,7 +91,7 @@ function canonicalId(model: AgyModel): string {
   return id;
 }
 
-export function researchedMetadataFor(model: AgyModel): ResearchedModelMetadata | undefined {
+export function researchedMetadataFor(model: AcpModel): ResearchedModelMetadata | undefined {
   return RESEARCHED[canonicalId(model)];
 }
 

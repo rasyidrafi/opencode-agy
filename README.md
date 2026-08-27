@@ -84,10 +84,15 @@ on the local machine and are not sent through the OpenCode proxy.
 | `OPENCODE_AGY_DATA_DIR` | Session metadata directory |
 | `OPENCODE_AGY_DEBUG=1` | Metadata-only debug logging |
 | `OPENCODE_AGY_MAX_REQUEST_BYTES` | Maximum request size |
-| `OPENCODE_AGY_TURN_STALL_MS` | No-update watchdog |
-| `OPENCODE_AGY_PRINT_TIMEOUT_MS` | ACP request timeout |
+| `OPENCODE_AGY_TURN_STALL_MS` | Idle timeout after the last ACP session update |
+| `OPENCODE_AGY_PRINT_TIMEOUT_MS` | Setup/request timeout, not a streamed-turn limit |
 | `OPENCODE_AGY_IDLE_WORKER_MS` | Idle session cleanup interval |
 | `OPENCODE_AGY_MAX_SESSIONS` | Maximum concurrent ACP sessions |
+
+Active turns do not have a default wall-clock limit. They time out only after
+`OPENCODE_AGY_TURN_STALL_MS` has elapsed since the last ACP `session/update`.
+`OPENCODE_AGY_PRINT_TIMEOUT_MS` covers setup RPCs and does not cut off an
+actively streaming turn.
 
 ## Supported input
 

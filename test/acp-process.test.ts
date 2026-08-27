@@ -4,6 +4,7 @@ import { describe, expect, test } from "bun:test";
 import { createAcpWorker } from "../src/acp-process.js";
 
 const fixture = join(import.meta.dir, "fixtures", "fake-acp.mjs");
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 describe("ACP process manager", () => {
   test("runs two serialized turns through one persistent worker", async () => {
@@ -42,6 +43,95 @@ describe("ACP process manager", () => {
     setTimeout(() => controller.abort(), 25).unref?.();
     await expect(turn).rejects.toThrow(/cancel/i);
     expect(worker.state).toBe("closed");
+  });
+
+  test("keeps a turn alive while ACP updates continue past the setup timeout", async () => {
+    await chmod(fixture, 0o755);
+    const worker = await createAcpWorker({
+      cwd: process.cwd(),
+      executable: fixture,
+      model: "fake-model-low",
+      printTimeoutMs: 5_000,
+      stallTimeoutMs: 500,
+    });
+    let response = "";
+    try {
+      // Setup RPCs use printTimeoutMs. A streamed turn must use the idle
+      // watchdog instead, so make the distinction visible without waiting
+      // five minutes for this test.
+      worker.options.printTimeoutMs = 50;
+      for await (const event of worker.runTurn("FAKE_SLOW_STREAM")) {
+        if (event.event === "update" && event.update.sessionUpdate === "agent_message_chunk" && event.update.content.type === "text") {
+          response += event.update.content.text;
+        }
+      }
+    } finally {
+      await worker.stop(true);
+    }
+    expect(response).toContain("FAKE_SLOW_STREAM_OK");
+    expect(worker.state).toBe("closed");
+  });
+
+  test("times out a turn only after the ACP stream goes quiet", async () => {
+    await chmod(fixture, 0o755);
+    const worker = await createAcpWorker({
+      cwd: process.cwd(),
+      executable: fixture,
+      model: "fake-model-low",
+      printTimeoutMs: 5_000,
+      stallTimeoutMs: 60,
+    });
+    const turn = (async () => {
+      for await (const _event of worker.runTurn("FAKE_HANG")) {
+        // The fixture intentionally emits no update or result.
+      }
+    })();
+    await expect(turn).rejects.toThrow(/without receiving an ACP stream update/i);
+    expect(worker.state).toBe("closed");
+  });
+
+  test("stops an idle worker even when the consumer is paused after an update", async () => {
+    await chmod(fixture, 0o755);
+    const worker = await createAcpWorker({
+      cwd: process.cwd(),
+      executable: fixture,
+      model: "fake-model-low",
+      printTimeoutMs: 5_000,
+      stallTimeoutMs: 60,
+    });
+    const iterator = worker.runTurn("FAKE_PAUSE_STREAM")[Symbol.asyncIterator]();
+    try {
+      const first = await iterator.next();
+      expect(first.done).toBe(false);
+      await sleep(700);
+      expect(worker.state).toBe("closed");
+    } finally {
+      await iterator.return?.();
+      await worker.stop(true);
+    }
+  });
+
+  test("does not time out after the ACP result has already arrived", async () => {
+    await chmod(fixture, 0o755);
+    const worker = await createAcpWorker({
+      cwd: process.cwd(),
+      executable: fixture,
+      model: "fake-model-low",
+      printTimeoutMs: 5_000,
+      stallTimeoutMs: 60,
+    });
+    const iterator = worker.runTurn("FAKE_STREAM")[Symbol.asyncIterator]();
+    try {
+      await iterator.next();
+      await sleep(150);
+      expect(worker.state).not.toBe("closed");
+      while (!(await iterator.next()).done) {
+        // Drain the queued ACP events and terminal result.
+      }
+    } finally {
+      await iterator.return?.();
+      await worker.stop(true);
+    }
   });
 
   test("answers ACP permission requests with the configured autonomous policy", async () => {

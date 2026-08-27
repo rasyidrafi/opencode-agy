@@ -9,6 +9,7 @@ const stateFile = process.env.FAKE_ACP_STATE_FILE;
 let remembered = stateFile && fs.existsSync(stateFile) ? JSON.parse(fs.readFileSync(stateFile, "utf8")).remembered ?? "" : "";
 let activePrompt;
 const pending = new Map();
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function send(message) {
   process.stdout.write(`${JSON.stringify(message)}\n`);
@@ -80,6 +81,18 @@ async function handlePrompt(message) {
     update({ sessionUpdate: "tool_call_update", toolCallId: "fake-progress-tool", title: "Read files", kind: "read", status: "completed", content: [{ type: "content", content: { type: "text", text: "package.json" } }] });
     update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "progressive answer" } });
   }
+  if (text.includes("FAKE_SLOW_STREAM")) {
+    update({ sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "slow thinking\n" } });
+    await sleep(80);
+    update({ sessionUpdate: "tool_call", toolCallId: "fake-slow-tool", title: "Read more files", kind: "read", status: "in_progress" });
+    await sleep(80);
+    update({ sessionUpdate: "tool_call_update", toolCallId: "fake-slow-tool", title: "Read more files", kind: "read", status: "completed" });
+    await sleep(80);
+  }
+  if (text.includes("FAKE_PAUSE_STREAM")) {
+    update({ sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "paused thinking\n" } });
+    await sleep(250);
+  }
   if (text.includes("remember FAKE_MEMORY")) {
     remembered = "FAKE_MEMORY";
     if (stateFile) fs.writeFileSync(stateFile, JSON.stringify({ remembered }));
@@ -87,6 +100,7 @@ async function handlePrompt(message) {
   let response = "FAKE_OK\n";
   if (text.includes("what did you remember")) response = `${remembered || "NOT_REMEMBERED"}\n`;
   if (text.includes("FAKE_STREAM")) response = "FAKE_STREAM_OK\n";
+  if (text.includes("FAKE_SLOW_STREAM")) response = "FAKE_SLOW_STREAM_OK\n";
   if (text.includes("[image]")) response = "IMAGE_OK\n";
   update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: response.slice(0, -1) } });
   update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "\n" } });

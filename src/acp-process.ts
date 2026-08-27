@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { access, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { performance } from "node:perf_hooks";
 import { Readable, Writable } from "node:stream";
 import {
   client,
@@ -44,7 +45,6 @@ export type AcpWorkerOptions = {
 type QueueWaiter<T> = {
   resolve: (result: IteratorResult<T>) => void;
   reject: (error: unknown) => void;
-  timer?: ReturnType<typeof setTimeout>;
   abort?: () => void;
 };
 
@@ -76,7 +76,7 @@ class AsyncEventQueue<T> {
     }
   }
 
-  next(options: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<IteratorResult<T>> {
+  next(options: { signal?: AbortSignal } = {}): Promise<IteratorResult<T>> {
     if (this.values.length) return Promise.resolve({ done: false, value: this.values.shift()! });
     if (this.closed) return this.closeError ? Promise.reject(this.closeError) : Promise.resolve({ done: true, value: undefined as never });
     return new Promise<IteratorResult<T>>((resolveResult, reject) => {
@@ -85,14 +85,6 @@ class AsyncEventQueue<T> {
         const index = this.waiters.indexOf(waiter);
         if (index >= 0) this.waiters.splice(index, 1);
       };
-      if (options.timeoutMs !== undefined) {
-        waiter.timer = setTimeout(() => {
-          remove();
-          this.cleanup(waiter);
-          reject(new AgyTimeoutError(`The ACP agent produced no update for ${Math.ceil(options.timeoutMs! / 1_000)} seconds`));
-        }, options.timeoutMs);
-        waiter.timer.unref?.();
-      }
       if (options.signal) {
         const onAbort = () => {
           remove();
@@ -111,9 +103,53 @@ class AsyncEventQueue<T> {
   }
 
   private cleanup(waiter: QueueWaiter<T>): void {
-    if (waiter.timer) clearTimeout(waiter.timer);
     waiter.abort?.();
   }
+}
+
+type TurnActivityWatchdog = {
+  touch: () => void;
+  stop: () => void;
+  lastActivityAt: () => number;
+};
+
+function createTurnActivityWatchdog(timeoutMs: number, onTimeout: () => void): TurnActivityWatchdog {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let stopped = false;
+  let fired = false;
+  let lastActivity = performance.now();
+
+  const schedule = () => {
+    if (stopped || fired || timeoutMs <= 0) return;
+    if (timer) clearTimeout(timer);
+    const remaining = timeoutMs - (performance.now() - lastActivity);
+    timer = setTimeout(() => {
+      timer = undefined;
+      if (stopped || fired) return;
+      if (performance.now() - lastActivity >= timeoutMs) {
+        fired = true;
+        onTimeout();
+      } else {
+        schedule();
+      }
+    }, Math.min(Math.max(1, remaining), 2_147_483_647));
+    timer.unref?.();
+  };
+
+  schedule();
+  return {
+    touch() {
+      if (stopped || fired) return;
+      lastActivity = performance.now();
+      schedule();
+    },
+    stop() {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+      timer = undefined;
+    },
+    lastActivityAt: () => lastActivity,
+  };
 }
 
 type TerminalRecord = {
@@ -135,6 +171,10 @@ function asAcpError(error: unknown, fallback: string): AgyError {
   if (/quota|rate limit|resource exhausted/.test(lower)) return new AgyError("quota", message, { code: "agy_acp_quota" });
   if (/cancel|abort/.test(lower)) return new AgyAbortError(message);
   return new AgyProcessError(message || fallback, error);
+}
+
+function timeoutMsOrDefault(value: number | undefined, fallback: number): number {
+  return value === undefined || !Number.isFinite(value) || value < 0 ? fallback : value;
 }
 
 function contentText(content: unknown): string {
@@ -181,6 +221,7 @@ export class AcpWorker {
   private stopping = false;
   private closePromise: Promise<void> | null = null;
   private turnEvents: AsyncEventQueue<AcpEvent> | null = null;
+  private turnWatchdog: TurnActivityWatchdog | null = null;
   private terminals = new Map<string, TerminalRecord>();
   private roots: string[] = [];
   private stderrDiagnostic = "";
@@ -339,6 +380,10 @@ export class AcpWorker {
 
   private onSessionUpdate(params: SessionNotification): void {
     if (!this.sessionIdValue || params.sessionId !== this.sessionIdValue || !this.turnEvents) return;
+    // A turn may legitimately run for longer than the setup/RPC timeout. Only
+    // reset the turn watchdog when the ACP transport actually delivers an
+    // update, so a busy stream cannot be mistaken for a hung turn.
+    this.turnWatchdog?.touch();
     this.turnEvents.push({ event: "update", sessionId: params.sessionId, update: params.update });
   }
 
@@ -354,50 +399,78 @@ export class AcpWorker {
     let requestPromise: Promise<PromptResponse> | undefined;
     let externalAborted = false;
     let timedOut = false;
-    let totalTimer: ReturnType<typeof setTimeout> | undefined;
+    let turnWatchdog: TurnActivityWatchdog | undefined;
+    let timeoutIdleMs = 0;
     const turnController = new AbortController();
     const cancel = () => this.connection?.agent.notify(methods.agent.session.cancel, { sessionId: this.sessionIdValue! }).catch(() => undefined);
+    const stallMs = timeoutMsOrDefault(this.options.stallTimeoutMs, configuredTurnStallTimeoutMs());
     try {
       const prompt = typeof content === "string" ? [{ type: "text", text: content } satisfies ContentBlock] : content;
       this.validatePromptCapabilities(prompt);
-      requestPromise = this.connection!.agent.request(methods.agent.session.prompt, {
-        sessionId: this.sessionIdValue,
-        prompt,
-      });
       const abort = () => {
         externalAborted = true;
         void cancel();
         turnController.abort();
       };
       signal?.addEventListener("abort", abort, { once: true });
-      const totalMs = this.options.printTimeoutMs ?? configuredPrintTimeoutMs();
-      if (totalMs > 0) {
-        totalTimer = setTimeout(() => {
-          timedOut = true;
-          void cancel();
-          turnController.abort();
-        }, totalMs);
-        totalTimer.unref?.();
-      }
+      /*
+       * printTimeoutMs belongs to setup RPCs such as initialize and session
+       * creation. It is deliberately not a wall-clock limit for a streamed
+      * turn. Long ACP tasks stay alive while session/update notifications
+      * arrive; this watchdog only fires after a quiet period.
+      */
+      turnWatchdog = createTurnActivityWatchdog(stallMs, () => {
+        timeoutIdleMs = performance.now() - (turnWatchdog?.lastActivityAt() ?? performance.now());
+        debug("ACP turn idle watchdog fired", { stallMs, idleMs: Math.round(timeoutIdleMs) });
+        timedOut = true;
+        void cancel();
+        turnController.abort();
+        // The generator may be suspended at `yield`, with no pending
+        // `next()` for the abort signal to reject. Stop the worker here too
+        // so an abandoned stream cannot leave an ACP process running.
+        void this.stop(true).catch(() => undefined);
+      });
+      this.turnWatchdog = turnWatchdog;
+      requestPromise = this.connection!.agent.request(methods.agent.session.prompt, {
+        sessionId: this.sessionIdValue,
+        prompt,
+      });
+      const events = this.turnEvents;
+      void requestPromise.then(
+        (response) => {
+          // A terminal response is activity too. Stop the idle timer before
+          // queueing it so a paused consumer cannot turn a completed prompt
+          // into a timeout while it is waiting to read the result.
+          turnWatchdog?.stop();
+          events.push({ event: "result", sessionId: this.sessionIdValue!, result: response });
+        },
+        (error) => {
+          turnWatchdog?.stop();
+          events.close(error);
+          // A rejected prompt is terminal even if the consumer is paused at
+          // an earlier update. Do not leave the ACP child alive waiting for a
+          // future `next()` call that may never happen.
+          void this.stop(true).catch(() => undefined);
+        },
+      );
       try {
-          while (true) {
-            const next = await Promise.race([
-              this.turnEvents.next({ timeoutMs: this.options.stallTimeoutMs ?? configuredTurnStallTimeoutMs(), signal: turnController.signal }).then((value) => ({ kind: "update" as const, value })),
-              requestPromise.then((response) => ({ kind: "result" as const, response })),
-            ]);
-          if (next.kind === "result") {
-            result = next.response;
+        while (true) {
+          const next = await this.turnEvents.next({ signal: turnController.signal });
+          if (next.done) break;
+          if (next.value.event === "result") {
+            result = next.value.result;
             break;
           }
-          if (!next.value.done) yield next.value.value;
+          yield next.value;
         }
       } finally {
         signal?.removeEventListener("abort", abort);
-        if (totalTimer) clearTimeout(totalTimer);
       }
       if (!result) throw new AgyProtocolError("The ACP prompt ended without a response");
-      yield { event: "result", sessionId: this.sessionIdValue, result };
+      turnWatchdog?.stop();
+      if (this.turnWatchdog === turnWatchdog) this.turnWatchdog = null;
       this.stateValue = "ready";
+      yield { event: "result", sessionId: this.sessionIdValue, result };
     } catch (error) {
       if (externalAborted || timedOut || turnController.signal.aborted) {
         await cancel();
@@ -409,12 +482,16 @@ export class AcpWorker {
           }),
         ]);
         await this.stop(true);
-        if (timedOut) throw new AgyTimeoutError("The ACP prompt timed out");
+        if (timedOut) {
+          throw new AgyTimeoutError(`The ACP prompt timed out after ${Math.ceil(Math.max(timeoutIdleMs, stallMs) / 1_000)} seconds without receiving an ACP stream update`);
+        }
         throw new AgyAbortError();
       }
       await this.stop(true).catch(() => undefined);
       throw asAcpError(error, "The ACP prompt failed");
     } finally {
+      turnWatchdog?.stop();
+      if (this.turnWatchdog === turnWatchdog) this.turnWatchdog = null;
       if (!result && !this.stopping && this.connection && this.sessionIdValue) {
         await cancel();
         await this.stop(true);
@@ -607,7 +684,7 @@ export class AcpWorker {
   }
 
   private async withSignal<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
-    const timeoutMs = this.options.printTimeoutMs ?? configuredPrintTimeoutMs();
+    const timeoutMs = timeoutMsOrDefault(this.options.printTimeoutMs, configuredPrintTimeoutMs());
     if (!signal && timeoutMs <= 0) return promise;
     if (signal?.aborted) throw new AgyAbortError();
     return new Promise<T>((resolveResult, reject) => {

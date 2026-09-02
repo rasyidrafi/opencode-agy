@@ -40,6 +40,7 @@ export type AcpWorkerOptions = {
   permissionPolicy?: "allow-always" | "allow-once" | "deny";
   printTimeoutMs?: number;
   stallTimeoutMs?: number;
+  onActivity?: () => void;
 };
 
 type QueueWaiter<T> = {
@@ -384,6 +385,7 @@ export class AcpWorker {
     // reset the turn watchdog when the ACP transport actually delivers an
     // update, so a busy stream cannot be mistaken for a hung turn.
     this.turnWatchdog?.touch();
+    this.options.onActivity?.();
     this.turnEvents.push({ event: "update", sessionId: params.sessionId, update: params.update });
   }
 

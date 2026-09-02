@@ -47,12 +47,14 @@ describe("ACP process manager", () => {
 
   test("keeps a turn alive while ACP updates continue past the setup timeout", async () => {
     await chmod(fixture, 0o755);
+    let activityCount = 0;
     const worker = await createAcpWorker({
       cwd: process.cwd(),
       executable: fixture,
       model: "fake-model-low",
       printTimeoutMs: 5_000,
       stallTimeoutMs: 500,
+      onActivity: () => { activityCount += 1; },
     });
     let response = "";
     try {
@@ -69,17 +71,20 @@ describe("ACP process manager", () => {
       await worker.stop(true);
     }
     expect(response).toContain("FAKE_SLOW_STREAM_OK");
+    expect(activityCount).toBeGreaterThan(0);
     expect(worker.state).toBe("closed");
   });
 
   test("times out a turn only after the ACP stream goes quiet", async () => {
     await chmod(fixture, 0o755);
+    let activityCount = 0;
     const worker = await createAcpWorker({
       cwd: process.cwd(),
       executable: fixture,
       model: "fake-model-low",
       printTimeoutMs: 5_000,
       stallTimeoutMs: 60,
+      onActivity: () => { activityCount += 1; },
     });
     const turn = (async () => {
       for await (const _event of worker.runTurn("FAKE_HANG")) {
@@ -87,6 +92,7 @@ describe("ACP process manager", () => {
       }
     })();
     await expect(turn).rejects.toThrow(/without receiving an ACP stream update/i);
+    expect(activityCount).toBe(0);
     expect(worker.state).toBe("closed");
   });
 

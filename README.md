@@ -94,6 +94,12 @@ Active turns do not have a default wall-clock limit. They time out only after
 `OPENCODE_AGY_PRINT_TIMEOUT_MS` covers setup RPCs and does not cut off an
 actively streaming turn.
 
+Code that creates an ACP worker may set `onActivity?: () => void` in
+`AcpWorkerOptions`. The callback runs for each accepted ACP `session/update`
+during an active turn. It is a heartbeat signal, not a completion callback.
+Active turns use this idle timeout behavior rather than a wall-clock deadline,
+so a stream can run as long as it keeps sending updates.
+
 ## Supported input
 
 ACP text, image, and audio blocks are supported. Images and audio may be sent

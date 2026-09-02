@@ -26,9 +26,13 @@ function zeroCost() {
 
 function modelVariants(model: AcpModel): Record<string, Record<string, unknown>> {
   if (!model.variants) return {};
-  return Object.fromEntries(
+  const variants = Object.fromEntries(
     Object.entries(model.variants).map(([effort, value]) => [effort, { effort: value.effort }]),
   );
+  // OpenCode's Anthropic transform adds a generic `max` variant to every
+  // reasoning model. Antigravity ACP only accepts low, medium, and high, so
+  // mark that generated variant as disabled before it reaches the UI.
+  return { ...variants, max: { disabled: true } };
 }
 
 function providerModel(model: AcpModel, baseURL: string): Record<string, unknown> {

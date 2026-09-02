@@ -136,7 +136,7 @@ input.on("line", (line) => {
     respond(message.id, {
       sessionId,
       configOptions: [
-        { id: "model", name: "Model", type: "select", currentValue: "gemini-3.7-flash-high", options: [{ value: "gemini-3.7-flash-high", name: "Fake Gemini" }, { value: "fake-model-low", name: "Fake Model" }] },
+        { id: "model", name: "Model", type: "select", currentValue: "gemini-3.8-flash-high", options: [{ value: "gemini-3.8-flash-high", name: "Fake Gemini" }, { value: "fake-model-low", name: "Fake Model" }] },
         { id: "mode", name: "Mode", type: "select", currentValue: "code", options: [{ value: "code", name: "Code" }, { value: "plan", name: "Plan" }] },
       ],
     });

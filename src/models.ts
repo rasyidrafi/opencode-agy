@@ -20,6 +20,9 @@ export type AcpModelCatalog = {
 };
 
 export const FALLBACK_MODELS: Array<[string, string]> = [
+  ["gemini-3.8-flash-high", "Gemini 3.8 Flash (High)"],
+  ["gemini-3.8-flash-medium", "Gemini 3.8 Flash (Medium)"],
+  ["gemini-3.8-flash-low", "Gemini 3.8 Flash (Low)"],
   ["gemini-3.7-flash-high", "Gemini 3.7 Flash (High)"],
   ["gemini-3.7-flash-medium", "Gemini 3.7 Flash (Medium)"],
   ["gemini-3.7-flash-low", "Gemini 3.7 Flash (Low)"],

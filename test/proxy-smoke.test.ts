@@ -11,7 +11,7 @@ const outsideWorkspace = await mkdtemp(join(tmpdir(), "opencode-agy-outside-"));
 const { getProxyBaseUrl, startProxy, stopProxy } = await import("../src/proxy.js");
 
 const authHeaders = { "content-type": "application/json", "x-api-key": "opencode-agy-local" };
-const message = (content: unknown, extra: Record<string, unknown> = {}) => ({ model: "gemini-3.7-flash", max_tokens: 4096, messages: [{ role: "user", content }], ...extra });
+const message = (content: unknown, extra: Record<string, unknown> = {}) => ({ model: "gemini-3.8-flash", max_tokens: 4096, messages: [{ role: "user", content }], ...extra });
 
 describe("loopback Anthropic proxy", () => {
   beforeAll(async () => { await chmod(fixture, 0o755); await startProxy(process.cwd()); });
@@ -24,7 +24,7 @@ describe("loopback Anthropic proxy", () => {
     const base = getProxyBaseUrl();
     expect((await fetch(base.replace(/\/v1$/, "") + "/health")).status).toBe(200);
     const models = await (await fetch(base + "/models", { headers: { "x-api-key": "opencode-agy-local" } })).json();
-    expect(models.data.some((model: { id: string }) => model.id === "gemini-3.7-flash")).toBe(true);
+    expect(models.data.some((model: { id: string }) => model.id === "gemini-3.8-flash")).toBe(true);
     const sessionHeaders = { ...authHeaders, "x-opencode-agy-session": "smoke" };
     const first = await fetch(base + "/messages", { method: "POST", headers: sessionHeaders, body: JSON.stringify(message("remember FAKE_MEMORY")) });
     expect(first.status).toBe(200);

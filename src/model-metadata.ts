@@ -30,6 +30,13 @@ const TEXT_OUTPUT = ["text"];
  * API documentation.
  */
 const RESEARCHED: Record<string, ResearchedModelMetadata> = {
+  "gemini-3.8-flash": {
+    context: 1_048_576,
+    output: 65_536,
+    source: "models.dev+google-api",
+    sources: [`${MODELS_DEV}/google/gemini-3.8-flash/`, `${GOOGLE_API}/models/gemini-3.8-flash`],
+    underlying: { input: GOOGLE_MULTIMODAL, output: TEXT_OUTPUT, attachment: true, reasoning: true, toolcall: true, structured: true, temperature: false },
+  },
   "gemini-3.7-flash": {
     context: 1_048_576,
     output: 65_536,

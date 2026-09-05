@@ -43,7 +43,7 @@ Register the plugin in `~/.config/opencode/opencode.jsonc`:
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["/absolute/path/to/opencode-agy/opencode-agy.js"]
+  "plugin": ["@rasyid_rafi/opencode-agy"]
 }
 ```
 

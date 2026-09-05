@@ -1,5 +1,5 @@
 {
-  "name": "opencode-agy",
+  "name": "@rasyid_rafi/opencode-agy",
   "version": "0.1.0",
   "description": "OpenCode provider adapter for Google's official Antigravity ACP server",
   "license": "MIT",
@@ -25,7 +25,9 @@
     "pretest": "npm run build",
     "test": "bun test test",
     "test:live": "OPENCODE_AGY_ACP_LIVE=1 bun test test/acp-live.test.ts",
-    "check": "npm run build && bun test test"
+    "check": "npm run build && bun test test",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run check"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.4.0",
@@ -37,7 +39,8 @@
     "typescript": "^5.9.3"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=18",
+    "bun": ">=1.3.0"
   },
   "publishConfig": {
     "access": "public"
@@ -49,5 +52,13 @@
     "agy",
     "anthropic-messages",
     "google"
-  ]
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rasyidrafi/opencode-agy.git"
+  },
+  "homepage": "https://github.com/rasyidrafi/opencode-agy#readme",
+  "bugs": {
+    "url": "https://github.com/rasyidrafi/opencode-agy/issues"
+  }
 }

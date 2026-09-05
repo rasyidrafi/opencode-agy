@@ -45,6 +45,7 @@ function update(update) {
 async function handlePrompt(message) {
   const id = message.id;
   const text = textFromPrompt(message.params?.prompt);
+  if (process.env.FAKE_ACP_PROMPT_LOG) fs.appendFileSync(process.env.FAKE_ACP_PROMPT_LOG, JSON.stringify({ text }) + "\n");
   activePrompt = { id, cancelled: false };
   if (text.includes("FAKE_HANG")) return;
   if (text.includes("FAKE_EXIT")) process.exit(1);
@@ -105,7 +106,7 @@ async function handlePrompt(message) {
   update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: response.slice(0, -1) } });
   update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "\n" } });
   update({ sessionUpdate: "usage_update", used: 12, size: 1000 });
-  respond(id, { stopReason: "end_turn", usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12, thoughtTokens: 0 } });
+  respond(id, { stopReason: text.includes("FAKE_MAX_TOKENS") ? "max_tokens" : text.includes("FAKE_MAX_TURNS") ? "max_turn_requests" : "end_turn", usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12, thoughtTokens: 0 } });
   activePrompt = undefined;
 }
 
@@ -137,7 +138,7 @@ input.on("line", (line) => {
       sessionId,
       configOptions: [
         { id: "model", name: "Model", type: "select", currentValue: "gemini-3.8-flash-high", options: [{ value: "gemini-3.8-flash-high", name: "Fake Gemini" }, { value: "fake-model-low", name: "Fake Model" }] },
-        { id: "mode", name: "Mode", type: "select", currentValue: "code", options: [{ value: "code", name: "Code" }, { value: "plan", name: "Plan" }] },
+        { id: "mode", name: "Mode", type: "select", currentValue: "code", options: [{ value: "code", name: "Code" }, { value: "plan", name: "Plan" }, { value: "default", name: "Default" }] },
       ],
     });
   } else if (message?.method === "session/load") {

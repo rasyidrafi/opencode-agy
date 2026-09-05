@@ -1,12 +1,15 @@
 import { chmod, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { DEFAULT_IDLE_WORKER_TIMEOUT_MS } from "./constants.js";
-import { debug, warn } from "./log.js";
+import { acquireFileLock } from "./file-lock.js";
+import { AgyBusyError } from "./errors.js";
+import type { AcpEvent } from "./protocol.js";
 
 export type SessionRecord = {
   sessionId: string;
+  revision?: string;
   model: string;
   effort?: string;
   cwd: string;
@@ -39,6 +42,7 @@ function validRecord(value: unknown): value is SessionRecord {
 function sanitizeRecord(value: SessionRecord): SessionRecord {
   return {
     sessionId: value.sessionId.slice(0, 200),
+    ...(typeof value.revision === "string" ? { revision: value.revision } : {}),
     model: value.model.slice(0, 200),
     ...(value.effort ? { effort: value.effort.slice(0, 20) } : {}),
     cwd: value.cwd.slice(0, 4_000),
@@ -50,123 +54,104 @@ function sanitizeRecord(value: SessionRecord): SessionRecord {
 }
 
 export class SessionStore {
-  private loaded = false;
-  private loadPromise: Promise<void> | null = null;
-  private records: DiskStore = {};
-  private writePromise: Promise<void> = Promise.resolve();
+  private async read(): Promise<DiskStore> {
+    try {
+      const parsed = JSON.parse(await readFile(storePath(), "utf8"));
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Invalid session metadata");
+      return Object.fromEntries(Object.entries(parsed).filter(([, value]) => validRecord(value))
+        .map(([key, value]) => [key, sanitizeRecord(value as SessionRecord)]));
+    } catch (error: any) {
+      if (error.code === "ENOENT") return {};
+      throw error;
+    }
+  }
 
-  private async load(): Promise<void> {
-    if (this.loaded) return;
-    if (this.loadPromise) return this.loadPromise;
-    this.loadPromise = (async () => {
-      try {
-        const raw = await readFile(storePath(), "utf8");
-        const parsed: unknown = JSON.parse(raw);
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-           for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
-             if (validRecord(value)) this.records[key] = sanitizeRecord(value);
-          }
-        }
-        try {
-          await chmod(dataDirectory(), 0o700);
-          await chmod(storePath(), 0o600);
-        } catch {
-          // Best effort on filesystems without POSIX modes.
-        }
-      } catch (error) {
-        const code = error && typeof error === "object" ? (error as { code?: unknown }).code : undefined;
-        if (code !== "ENOENT") warn("session metadata could not be loaded; starting with an empty store", { code });
-      } finally {
-        this.loaded = true;
-        this.loadPromise = null;
-      }
-    })();
-    return this.loadPromise;
+  private async mutate(change: (records: DiskStore) => void | Promise<void>): Promise<void> {
+    const unlock = await acquireFileLock(join(dataDirectory(), "sessions.lock"), 5_000);
+    try {
+      const records = await this.read();
+      await change(records);
+      await chmod(dataDirectory(), 0o700);
+      await atomicWrite(storePath(), records);
+    } finally { await unlock(); }
   }
 
   async get(key: string): Promise<SessionRecord | undefined> {
-    await this.load();
-    const record = this.records[key];
-    return record ? { ...record } : undefined;
+    return (await this.read())[key];
   }
 
   async set(key: string, record: SessionRecord): Promise<void> {
-    await this.load();
-    this.records[key] = sanitizeRecord(record);
-    await this.persist();
+    await this.mutate(records => { records[key] = sanitizeRecord(record); });
   }
 
   async delete(key: string): Promise<void> {
-    await this.load();
-    if (!(key in this.records)) return;
-    delete this.records[key];
-    await this.persist();
+    await this.mutate(records => { delete records[key]; });
   }
 
   async entries(): Promise<Array<[string, SessionRecord]>> {
-    await this.load();
-    return Object.entries(this.records).map(([key, value]) => [key, { ...value }]);
+    return Object.entries(await this.read());
   }
 
   async prune(maxIdleMs = DEFAULT_IDLE_WORKER_TIMEOUT_MS * 4, protectedKeys: ReadonlySet<string> = new Set()): Promise<void> {
-    await this.load();
-    const threshold = Date.now() - maxIdleMs;
-    let changed = false;
-    for (const [key, record] of Object.entries(this.records)) {
-      if (protectedKeys.has(key)) continue;
-      if (record.lastUsedAt < threshold) {
-        delete this.records[key];
-        changed = true;
+    // Request receipts are kept independently: pruning idle metadata must not
+    // make a previously submitted request executable again.
+    await this.mutate(async records => {
+      for (const [key, record] of Object.entries(records)) {
+        if (protectedKeys.has(key) || record.lastUsedAt >= Date.now() - maxIdleMs) continue;
+        let unlock: (() => Promise<void>) | undefined;
+        try {
+          unlock = await this.lockTurn(key);
+          delete records[key];
+        } catch (error) {
+          if (!(error instanceof AgyBusyError)) throw error;
+        } finally { await unlock?.(); }
       }
-    }
-    if (changed) await this.persist();
-  }
-
-  private async persist(): Promise<void> {
-    const snapshot = JSON.stringify(this.records, null, 2);
-    this.writePromise = this.writePromise.catch(() => undefined).then(async () => {
-      await mkdir(dataDirectory(), { recursive: true, mode: 0o700 });
-      try {
-        await chmod(dataDirectory(), 0o700);
-      } catch {
-        // Best effort on filesystems without POSIX modes.
-      }
-      const temporary = join(dataDirectory(), `.sessions.${process.pid}.${randomUUID()}.tmp`);
-      await writeFile(temporary, snapshot, { encoding: "utf8", mode: 0o600 });
-      try {
-        await chmod(temporary, 0o600);
-      } catch {
-        // Best effort on Windows.
-      }
-      await rename(temporary, storePath());
-      try {
-        await chmod(storePath(), 0o600);
-      } catch {
-        // Best effort on Windows.
-      }
-      debug("persisted non-secret session metadata", { records: Object.keys(this.records).length });
-    }).catch(async (error) => {
-      warn("could not persist non-secret session metadata", { code: error && typeof error === "object" ? (error as { code?: unknown }).code : undefined });
-      throw error;
     });
-    return this.writePromise;
   }
 
   async clear(): Promise<void> {
-    this.records = {};
-    this.loaded = true;
-    await this.writePromise;
+    await this.mutate(records => { for (const key of Object.keys(records)) delete records[key]; });
+  }
+
+  async lockTurn(key: string): Promise<() => Promise<void>> {
+    return acquireFileLock(join(dataDirectory(), "turns", `${digest(key)}.lock`));
+  }
+
+  async receipt(key: string, request: string): Promise<RequestReceipt | undefined> {
     try {
-      await unlink(storePath());
-    } catch (error) {
-      const code = error && typeof error === "object" ? (error as { code?: unknown }).code : undefined;
-      if (code !== "ENOENT") throw error;
+      const value = JSON.parse(await readFile(receiptPath(key, request), "utf8"));
+      if (value?.state !== "started" && value?.state !== "completed") throw new Error("Invalid request receipt");
+      return value;
+    } catch (error: any) {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
     }
   }
+
+  async saveReceipt(key: string, request: string, receipt: RequestReceipt): Promise<void> {
+    await atomicWrite(receiptPath(key, request), receipt);
+  }
+
 }
 
 export const sessionStore = new SessionStore();
 
 export function sessionStoreDirectory(): string {
   return dataDirectory();
+}
+
+export type RequestReceipt = { state: "started" | "completed"; events?: AcpEvent[] };
+
+function digest(value: string): string { return createHash("sha256").update(value).digest("hex"); }
+function receiptPath(key: string, request: string): string {
+  return join(dataDirectory(), "requests", digest(key), `${digest(request)}.json`);
+}
+
+async function atomicWrite(path: string, value: unknown): Promise<void> {
+  await mkdir(join(path, ".."), { recursive: true, mode: 0o700 });
+  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, JSON.stringify(value), { encoding: "utf8", mode: 0o600 });
+    await rename(temporary, path);
+  } finally { await unlink(temporary).catch(() => undefined); }
 }

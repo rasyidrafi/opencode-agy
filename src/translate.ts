@@ -12,7 +12,7 @@ export type AnthropicUsage = {
 
 export type AnthropicFinishReason = "end_turn" | "max_tokens" | "stop_sequence";
 export type OrderedSegment = { kind: "text" | "thinking" | "activity"; text: string };
-export type AcpTranslationState = { tools: Map<string, { title: string }> };
+export type AcpTranslationState = { tools: Map<string, { title: string; failureShown?: boolean }> };
 
 export function createAcpTranslationState(): AcpTranslationState {
   return { tools: new Map() };
@@ -88,25 +88,53 @@ function toolContentText(content: unknown): string {
   return value.type === "content" ? contentText(value.content) : contentText(content);
 }
 
+function compactActivity(text: string, max = 240): string {
+  const clean = text.replace(/[\x00-\x1f\x7f]/g, " ").replace(/\s+/g, " ").trim();
+  return clean.length > max ? clean.slice(0, max - 1) + "…" : clean;
+}
+
+function toolDescription(value: Record<string, unknown>): string | undefined {
+  const supplied = typeof value.title === "string" && value.title ? value.title
+    : typeof value.name === "string" && value.name ? value.name : undefined;
+  const input = value.rawInput && typeof value.rawInput === "object" ? value.rawInput as Record<string, unknown> : {};
+  // Include identifying arguments, never file contents, patches, or arbitrary
+  // credential fields from rawInput.
+  const details = [input.command, input.path, input.file_path, input.query, input.pattern]
+    .filter((entry): entry is string => typeof entry === "string" && !!entry);
+  if (Array.isArray(value.locations)) {
+    for (const location of value.locations) {
+      if (location && typeof location === "object" && typeof location.path === "string") {
+        details.push(location.path + (typeof location.line === "number" ? `, line ${location.line}` : ""));
+      }
+    }
+  }
+  const title = supplied || ({ read: "Read", edit: "Edit", execute: "Shell", search: "Search" } as Record<string, string>)[String(value.kind)];
+  if (!title && !details.length) return undefined;
+  const unique = [...new Set(details)].filter(detail => !title?.includes(detail));
+  return compactActivity(`${title || "tool"}${unique.length ? `: ${unique.join("; ")}` : ""}`);
+}
+
 function toolActivity(update: SessionUpdate, state?: AcpTranslationState): string | undefined {
   if (update.sessionUpdate !== "tool_call" && update.sessionUpdate !== "tool_call_update") return undefined;
   const value = update as unknown as Record<string, unknown>;
   const id = typeof value.toolCallId === "string" && value.toolCallId ? value.toolCallId : undefined;
   const status = typeof value.status === "string" ? value.status.toLowerCase() : "in_progress";
-  const suppliedTitle = typeof value.title === "string" && value.title ? value.title : typeof value.name === "string" && value.name ? value.name : undefined;
-  const known = id ? state?.tools.get(id) : undefined;
-  const title = suppliedTitle ?? known?.title ?? "tool";
-  const output = Array.isArray(value.content) ? value.content.map(toolContentText).filter(Boolean).join("").slice(0, 2_000) : "";
-  if (status === "completed") return undefined;
+  const description = toolDescription(value);
+  const key = id ?? `title:${description || "tool"}`;
+  const known = state?.tools.get(key);
+  const title = known?.title ?? description ?? "tool";
   if (status === "failed" || status === "cancelled") {
-    const label = status === "failed" ? "failed" : "cancelled";
-    return `[Antigravity ACP tool ${label}: ${title}]${output ? `\n${output}` : ""}`;
+    if (known?.failureShown) return undefined;
+    state?.tools.set(key, { title, failureShown: true });
+    const output = Array.isArray(value.content)
+      ? compactActivity(value.content.map(toolContentText).filter(Boolean).join("\n"), 2_000) : "";
+    return `[Antigravity ACP tool ${status}: ${title}]${output ? `\n${output}` : ""}`;
   }
-  const key = id ?? `title:${title}`;
-  if (state?.tools.has(key)) return undefined;
+  if (known) return undefined;
   state?.tools.set(key, { title });
-  const running = /^running\b/i.test(title) ? title : `Running ${title}`;
-  return `[Antigravity ACP tool: ${running}]`;
+  // Some ACP servers report a call only once, already completed.
+  const label = status === "completed" || /^running\b/i.test(title) ? title : `Running ${title}`;
+  return `[Antigravity ACP tool: ${label}]`;
 }
 
 function planActivity(update: SessionUpdate): string | undefined {

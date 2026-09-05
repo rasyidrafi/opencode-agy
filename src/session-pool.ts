@@ -1,3 +1,4 @@
+import { createHash, randomUUID } from "node:crypto";
 import { AcpWorker, createAcpWorker, type AcpWorkerOptions } from "./acp-process.js";
 import {
   AgyAbortError,
@@ -29,6 +30,7 @@ export type SessionSettings = {
 
 export type SessionTurnRequest = {
   key: string;
+  requestId?: string;
   prompt: ContentBlock[];
   priorMessages?: Array<{ role?: unknown; content?: unknown }>;
   settings: SessionSettings;
@@ -148,17 +150,37 @@ export class SessionPool {
       await waitForPrevious(previous, signal);
       if (this.disposed) throw new AgyProcessError("The Antigravity session pool has been shut down");
       if (signal.aborted) throw new AgyAbortError();
-      yield* this.runTurn(entry, { ...request, signal });
+      const unlock = await sessionStore.lockTurn(request.key);
+      try {
+        if (signal.aborted) throw new AgyAbortError();
+        const identity = request.requestId || createHash("sha256").update(JSON.stringify({
+          prior: request.priorMessages, prompt: request.prompt,
+        })).digest("hex");
+        const receipt = await sessionStore.receipt(request.key, identity);
+        if (receipt) {
+          if (receipt.state === "completed" && receipt.events) { yield* receipt.events; return; }
+          throw new AgyError("invalid_request", "This request already started in Antigravity. Send a new message to continue; retrying could repeat workspace changes.", { code: "agy_request_already_started", status: 409 });
+        }
+        yield* this.runTurn(entry, { ...request, signal }, identity);
+      } finally { await unlock(); }
     } finally {
-      release();
+      void previous.then(release);
       entry.pending = Math.max(0, entry.pending - 1);
       entry.lastUsedAt = Date.now();
     }
   }
 
-  private async *runTurn(entry: SessionEntry, request: SessionTurnRequest): AsyncGenerator<AcpEvent> {
+  private async *runTurn(entry: SessionEntry, request: SessionTurnRequest, identity: string): AsyncGenerator<AcpEvent> {
     const signature = settingsSignature(request.settings);
-    let record = entry.record ?? await sessionStore.get(request.key);
+    const record = await sessionStore.get(request.key);
+    // Another process may have advanced or replaced this session since our
+    // last turn. Reload it instead of using a stale in-memory ACP worker.
+    if (entry.worker && JSON.stringify(entry.record) !== JSON.stringify(record)) {
+      await entry.worker.stop();
+      entry.worker = undefined;
+      entry.settingsSignature = undefined;
+      entry.historyTransferred = false;
+    }
     entry.record = record;
     if (entry.worker && (entry.worker.state === "closed" || entry.worker.state === "failed")) {
       entry.worker = undefined;
@@ -187,9 +209,24 @@ export class SessionPool {
     const prompt: ContentBlock[] = history
       ? [{ type: "text", text: `${history}\n\n<current-user-message>` }, ...request.prompt, { type: "text", text: "</current-user-message>" }]
       : request.prompt;
+    // This write must succeed before sending a prompt that can change files.
+    await sessionStore.saveReceipt(request.key, identity, { state: "started" });
     if (history) entry.historyTransferred = true;
+    const events: AcpEvent[] = [];
+    let bytes = 0;
+    let cacheable = true;
     try {
       for await (const event of entry.worker.runTurn(prompt, request.signal)) {
+        bytes += Buffer.byteLength(JSON.stringify(event));
+        if (bytes <= 2_000_000) events.push(event);
+        else { cacheable = false; events.length = 0; }
+        if (event.event === "result" && event.result.stopReason !== "cancelled") {
+          // Persist before exposing success, including when the consumer stops
+          // reading immediately after the terminal event.
+          await sessionStore.saveReceipt(request.key, identity, {
+            state: "completed", ...(cacheable ? { events } : {}),
+          });
+        }
         yield event;
       }
     } catch (error) {
@@ -222,6 +259,7 @@ export class SessionPool {
     const previous = entry.record;
     const record: SessionRecord = {
       sessionId,
+      revision: randomUUID(),
       model: settings.model,
       ...(settings.effort ? { effort: settings.effort } : {}),
       cwd: settings.cwd,
@@ -265,9 +303,12 @@ export class SessionPool {
   async forget(key: string): Promise<void> {
     const entry = this.entries.get(key);
     if (entry?.pending) throw new AgyBusyError("Cannot forget an active Antigravity session");
-    await entry?.worker?.stop();
-    this.entries.delete(key);
-    await sessionStore.delete(key);
+    const unlock = await sessionStore.lockTurn(key);
+    try {
+      await entry?.worker?.stop();
+      this.entries.delete(key);
+      await sessionStore.delete(key);
+    } finally { await unlock(); }
   }
 
   async status(key: string): Promise<Record<string, unknown>> {

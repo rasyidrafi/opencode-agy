@@ -81,7 +81,7 @@ on the local machine and are not sent through the OpenCode proxy.
 | `OPENCODE_AGY_ACP_PERMISSION=allow-always\|allow-once\|deny` | Automatic ACP permission response; default `allow-always` |
 | `OPENCODE_AGY_MODE=plan\|accept-edits` | ACP session mode when advertised |
 | `OPENCODE_AGY_PROXY_PORT` | Loopback proxy port; default ephemeral |
-| `OPENCODE_AGY_DATA_DIR` | Session metadata directory |
+| `OPENCODE_AGY_DATA_DIR` | Session metadata and request replay directory |
 | `OPENCODE_AGY_DEBUG=1` | Metadata-only debug logging |
 | `OPENCODE_AGY_MAX_REQUEST_BYTES` | Maximum request size |
 | `OPENCODE_AGY_TURN_STALL_MS` | Idle timeout after the last ACP session update |
@@ -113,6 +113,26 @@ provider tool loop is separate from the ACP agent tool loop.
 Filesystem requests are restricted to the configured workspace. Terminal
 requests use sanitized environment variables and are controlled by the ACP
 permission policy. The adapter is not an operating-system sandbox.
+
+## Sessions and retries
+
+The adapter forwards OpenCode message IDs and records requests before sending
+prompts to ACP. A repeated completed request replays the saved response. A
+request that failed or was interrupted after submission is rejected on retry;
+send a new message to continue. Clients without message IDs use a hash of the
+conversation and current prompt.
+
+Session turns and metadata updates use local process locks. Another OpenCode
+process cannot run a turn in the same session while one is active.
+
+`OPENCODE_AGY_DATA_DIR` defaults to `$XDG_DATA_HOME/opencode-agy`, or
+`~/.local/share/opencode-agy`. It contains `sessions.json` and request receipts
+under `requests/`. Completed receipts include response events, including text,
+reasoning, and tool activity, up to 2 MB per request. Larger responses retain a
+completion marker and reject retries instead of executing again. Directories
+use mode `0700` and files use `0600` on POSIX filesystems. Request receipts remain
+after idle session metadata is pruned. Deleting them removes retry protection
+for those requests.
 
 ## Local endpoints
 

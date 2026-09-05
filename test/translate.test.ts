@@ -57,4 +57,20 @@ describe("ACP to Anthropic translation", () => {
     })());
     expect(result.content).toBe("hello");
   });
+  test("shows bounded identifying arguments and only one failure per call", () => {
+    const state = createAcpTranslationState();
+    const update = (value: any) => mapAcpEvent({ event: "update", sessionId: "s", update: value }, state);
+    const started = update({ sessionUpdate: "tool_call", toolCallId: "shell", title: "run_command", kind: "execute", status: "in_progress",
+      rawInput: { command: "rg -n TODO src", token: "SECRET", content: "FILE_BODY" } });
+    expect(started).toEqual({ kind: "activity", text: "[Antigravity ACP tool: Running run_command: rg -n TODO src]" });
+    const failed = { sessionUpdate: "tool_call_update", toolCallId: "shell", status: "failed" };
+    expect(update(failed)).toEqual({ kind: "activity", text: "[Antigravity ACP tool failed: run_command: rg -n TODO src]" });
+    expect(update(failed).kind).toBe("ignore");
+    expect(update({ sessionUpdate: "tool_call", toolCallId: "read", kind: "read", status: "completed", locations: [{ path: "src/index.ts", line: 10 }] }))
+      .toEqual({ kind: "activity", text: "[Antigravity ACP tool: Read: src/index.ts, line 10]" });
+    const long = update({ sessionUpdate: "tool_call", toolCallId: "long", title: "x\u001b\n" + "y".repeat(1000) });
+    expect((long as any).text.length).toBeLessThan(280);
+    expect((long as any).text).not.toContain("\u001b");
+  });
+
 });

@@ -9,6 +9,8 @@ import {
   EFFORT_HEADER,
   LOCAL_API_KEY,
   MODEL_HEADER,
+  MESSAGE_HEADER,
+  REQUEST_KIND_HEADER,
   REQUEST_TOKEN_HEADER,
   SESSION_HEADER,
   envNumber,
@@ -230,6 +232,7 @@ function streamAnthropic(
       let nextBlockIndex = 0;
       let active: { index: number; kind: "text" | "thinking" } | undefined;
       let streamedText = "";
+      let finishReason = "end_turn";
       let stepUsage: AnthropicUsage | undefined;
       let resultUsage: AnthropicUsage | undefined;
       const translation = createAcpTranslationState();
@@ -267,6 +270,7 @@ function streamAnthropic(
           else if (mapped.kind === "usage") stepUsage = addAnthropicUsage(stepUsage, mapped.usage);
           else if (mapped.kind === "result") {
             resultUsage = mapped.usage;
+            finishReason = mapped.finishReason;
             const suffix = appendResultWithoutDuplication(streamedText, mapped.response);
             if (suffix === undefined) throw new AgyProtocolError("ACP message chunks did not match the terminal response");
             if (suffix) { streamedText += suffix; emitBlock("text", suffix, true); }
@@ -278,7 +282,7 @@ function streamAnthropic(
           }
         }
         closeBlock();
-        send({ type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: anthropicUsage(stepUsage ?? resultUsage) });
+        send({ type: "message_delta", delta: { stop_reason: finishReason, stop_sequence: null }, usage: anthropicUsage(stepUsage ?? resultUsage) });
         send({ type: "message_stop" });
         if (!closed) controller.close();
       } catch (error) {
@@ -343,14 +347,14 @@ async function handleMessages(request: Request, body: AnthropicMessageRequest): 
   const mode: "accept-edits" | "plan" | undefined = process.env.OPENCODE_AGY_MODE === "accept-edits" || process.env.OPENCODE_AGY_MODE === "plan" ? process.env.OPENCODE_AGY_MODE : undefined;
   const settings = { cwd, model: selected.acpModel, ...(selected.effort ? { effort: selected.effort } : {}), ...(mode ? { mode } : {}), cliVersion: runtime.catalog.version, executable: runtime.catalog.executable } as const;
   const normalized = await normalizePrompt(requestMessages, { allowedRoots: [cwd] });
-  const metaKind = detectMetaRequestKind(normalized.messages);
+  const metaKind = detectMetaRequestKind(normalized.messages, readHeader(request, REQUEST_KIND_HEADER));
   if (metaKind) {
     try {
       const utility = await runAcpOneShot(buildUtilityPrompt(metaKind, normalized.messages), { cwd, model: selected.acpModel, ...(selected.effort ? { effort: selected.effort } : {}), executable: settings.executable, signal: request.signal });
       return body.stream === true ? utilityStream(utility, responseModel(body.model, selected.requestedModel)) : utilityMessage(utility, responseModel(body.model, selected.requestedModel));
     } catch (error) { return errorResponse(error); }
   }
-  const events = sessionPool.turn({ key, prompt: normalized.blocks, priorMessages: normalized.priorMessages, settings, signal: request.signal });
+  const events = sessionPool.turn({ key, requestId: readHeader(request, MESSAGE_HEADER), prompt: normalized.blocks, priorMessages: normalized.priorMessages, settings, signal: request.signal });
   const probed = await probeTurn(events);
   if ("error" in probed) return errorResponse(probed.error);
   if (body.stream !== true) {

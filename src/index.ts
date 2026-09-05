@@ -4,6 +4,8 @@ import {
   EFFORT_HEADER,
   LOCAL_API_KEY,
   MODEL_HEADER,
+  MESSAGE_HEADER,
+  REQUEST_KIND_HEADER,
   ANTHROPIC_NPM,
   PROVIDER_ID,
   PROVIDER_NAME,
@@ -157,11 +159,16 @@ export const AntigravityCliPlugin: Plugin = async (input: PluginInput): Promise<
     "chat.headers": async (hookInput, output) => {
       if (hookInput.model.providerID !== PROVIDER_ID) return;
       const messageModel = hookInput.message.model as unknown as { variant?: unknown } | undefined;
-      const variant = typeof messageModel?.variant === "string" ? messageModel.variant : undefined;
+      const messageVariant = (hookInput.message as { variant?: unknown }).variant;
+      const variant = typeof messageVariant === "string" && messageVariant ? messageVariant
+        : typeof messageModel?.variant === "string" ? messageModel.variant : undefined;
       output.headers[MODEL_HEADER] = hookInput.model.id;
       if (variant) output.headers[EFFORT_HEADER] = variant;
       output.headers[DIRECTORY_HEADER] = input.directory;
       output.headers[SESSION_HEADER] = hookInput.sessionID;
+      output.headers[MESSAGE_HEADER] = hookInput.message.id;
+      output.headers[REQUEST_KIND_HEADER] = hookInput.agent === "title" ? "title"
+        : ["summary", "compaction"].includes(hookInput.agent) ? "summary" : "chat";
     },
 
     "chat.params": async (hookInput, output) => {

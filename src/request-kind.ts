@@ -2,13 +2,6 @@ import { extractTextContent, type HostMessage } from "./prompt.js";
 
 export type MetaRequestKind = "title" | "summary" | null;
 
-function textForRole(messages: HostMessage[], role: string): string {
-  return messages
-    .filter((message) => message.role === role)
-    .map((message) => String(message.content ?? ""))
-    .join("\n");
-}
-
 export function metaSystemPrompt(messages: HostMessage[]): string {
   return messages
     .filter((message) => message.role === "system")
@@ -32,15 +25,13 @@ export function isSummaryGenerationRequest(messages: HostMessage[]): boolean {
     system.includes("tasked with summarizing conversations") ||
     system.includes("write like a pull request description") ||
     system.includes("summarize what was done in this conversation")) return true;
-  const user = textForRole(messages, "user").toLowerCase();
-  return user.includes("this summary will be the only context available when the conversation continues") ||
-    user.includes("create a detailed summary for continuing this coding session") ||
-    user.includes("anchored summary from the conversation history") ||
-    user.includes("anchored summary below using the conversation history") ||
-    user.includes("<previous-summary>");
+  return false;
 }
 
-export function detectMetaRequestKind(messages: HostMessage[]): MetaRequestKind {
+export function detectMetaRequestKind(messages: HostMessage[], explicitKind?: string): MetaRequestKind {
+  if (explicitKind === "chat") return null;
+  if (explicitKind === "title") return "title";
+  if (explicitKind === "summary" || explicitKind === "compaction") return "summary";
   if (isTitleGenerationRequest(messages)) return "title";
   if (isSummaryGenerationRequest(messages)) return "summary";
   return null;

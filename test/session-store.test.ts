@@ -27,3 +27,69 @@ describe("non-secret session persistence", () => {
     expect((await stat(join(directory, "sessions.json"))).mode & 0o777).toBe(0o600);
   });
 });
+
+test("independent store instances preserve each other's writes", async () => {
+  process.env.OPENCODE_AGY_DATA_DIR = await mkdtemp(join(tmpdir(), "agy-store-concurrent-"));
+  const left = new SessionStore();
+  const right = new SessionStore();
+  await Promise.all([left.entries(), right.entries()]);
+  const record = { sessionId: "s", model: "m", cwd: "/workspace", cliVersion: null, createdAt: Date.now(), updatedAt: Date.now(), lastUsedAt: Date.now() };
+  await Promise.all([left.set("left", record), right.set("right", record)]);
+  expect((await left.entries()).map(([key]) => key).sort()).toEqual(["left", "right"]);
+  expect((await right.entries()).length).toBe(2);
+});
+
+test("turn lock excludes another process and recovers a dead owner", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "agy-store-process-"));
+  process.env.OPENCODE_AGY_DATA_DIR = directory;
+  const storeModule = join(import.meta.dir, "..", "src", "session-store.ts");
+  const child = Bun.spawn([process.execPath, "--eval", `
+    const { SessionStore } = await import(${JSON.stringify(storeModule)});
+    await new SessionStore().lockTurn("shared");
+    console.log("locked");
+    await Bun.stdin.text();
+  `], { env: { ...process.env }, stdout: "pipe", stderr: "pipe", stdin: "pipe" });
+  const reader = child.stdout.getReader();
+  try {
+    const ready = await reader.read();
+    expect(new TextDecoder().decode(ready.value)).toContain("locked");
+    await expect(new SessionStore().lockTurn("shared")).rejects.toThrow("busy");
+    child.kill("SIGKILL");
+    await child.exited;
+    const unlock = await new SessionStore().lockTurn("shared");
+    await unlock();
+  } finally {
+    reader.releaseLock();
+    child.kill();
+    await child.exited;
+  }
+});
+
+test("concurrent processes preserve every session mapping", async () => {
+  process.env.OPENCODE_AGY_DATA_DIR = await mkdtemp(join(tmpdir(), "agy-store-writers-"));
+  const storeModule = join(import.meta.dir, "..", "src", "session-store.ts");
+  const children = Array.from({ length: 3 }, (_, index) => Bun.spawn([process.execPath, "--eval", `
+    const { SessionStore } = await import(${JSON.stringify(storeModule)});
+    const store = new SessionStore();
+    for (let i = 0; i < 5; i++) await store.set(${JSON.stringify(String(index))} + "-" + i, {
+      sessionId: "s", model: "m", cwd: "/workspace", cliVersion: null,
+      createdAt: Date.now(), updatedAt: Date.now(), lastUsedAt: Date.now()
+    });
+  `], { env: { ...process.env }, stdout: "ignore", stderr: "pipe" }));
+  expect(await Promise.all(children.map(child => child.exited))).toEqual([0, 0, 0]);
+  expect((await new SessionStore().entries()).length).toBe(15);
+});
+
+test("pruning preserves sessions locked by another owner", async () => {
+  process.env.OPENCODE_AGY_DATA_DIR = await mkdtemp(join(tmpdir(), "agy-store-prune-"));
+  const store = new SessionStore();
+  await store.set("active", { sessionId: "s", model: "m", cwd: "/workspace", cliVersion: null,
+    createdAt: 1, updatedAt: 1, lastUsedAt: 1 });
+  const unlock = await store.lockTurn("active");
+  try {
+    await new SessionStore().prune(0);
+    expect(await store.get("active")).toBeDefined();
+  } finally { await unlock(); }
+  await store.prune(0);
+  expect(await store.get("active")).toBeUndefined();
+});

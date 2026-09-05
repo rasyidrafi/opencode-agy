@@ -21,6 +21,8 @@ export const MODEL_HEADER = "x-opencode-agy-model";
 export const EFFORT_HEADER = "x-opencode-agy-effort";
 export const SESSION_HEADER = "x-opencode-agy-session";
 export const DIRECTORY_HEADER = "x-opencode-agy-directory";
+export const MESSAGE_HEADER = "x-opencode-agy-message";
+export const REQUEST_KIND_HEADER = "x-opencode-agy-request-kind";
 export const REQUEST_TOKEN_HEADER = "x-opencode-agy-token";
 
 export const SUPPORTED_EFFORTS = ["low", "medium", "high"] as const;
